@@ -18,10 +18,12 @@ describe('layouts plugin', () => {
     it('registers all the expected hooks', () => {
         const h = createHarness()
         layouts()(h.core)
-        // One onLoaded handler — state init only. The MCP wrapper
-        // (mikser_layouts_inspect) moved to the mikser-io-mcp plugin
-        // in 8.2.0 and reaches in via runtime.options.layouts.inspect.
-        assert.equal(h.hooks.loaded.length, 1)
+        // Two onLoaded handlers — state init + MCP tool registration.
+        // MCP registration is a no-op when runtime.options.mcp isn't
+        // present (vector / schemas / preview use the same gating
+        // pattern). Before tools-with-domain moved, the registration
+        // lived in mikser-io-mcp.
+        assert.equal(h.hooks.loaded.length, 2)
         assert.equal(h.hooks.import.length, 1)
         assert.equal(h.hooks.processed.length, 1)
         assert.equal(h.hooks.beforeRender.length, 1)

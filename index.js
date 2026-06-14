@@ -25,6 +25,7 @@ import {
 import { createInspect } from './lib/inspect.js'
 import { createOnProcessed } from './lib/matching.js'
 import { createOnBeforeRender } from './lib/assembly.js'
+import { registerMcpTools } from './lib/mcp.js'
 
 export function layouts(options = {}) {
     return ({
@@ -82,6 +83,15 @@ export function layouts(options = {}) {
         runtime.options.layouts = {
             inspect: createInspect({ runtime, findEntity, findEntities, useDatabase, collection }),
         }
+
+        // MCP tool registration. Gated on runtime.options.mcp — when the
+        // mcp plugin isn't loaded, this is a no-op (vector / schemas /
+        // preview use the same pattern). The mcp plugin must be FIRST
+        // in the plugins array for this to fire; that constraint is
+        // documented in mikser-io's CLAUDE.md.
+        onLoaded(async () => {
+            registerMcpTools({ runtime, useLogger })
+        })
 
         onSync(collection, async ({ action, context }) => {
             if (!context.relativePath) return false

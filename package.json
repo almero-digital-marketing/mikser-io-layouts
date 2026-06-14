@@ -23,6 +23,7 @@
   "dependencies": {
     "globby": "^14.0.0",
     "handlebars": "^4.7.0",
-    "lodash": "^4.17.0"
+    "lodash": "^4.17.0",
+    "zod": "^4.4.3"
   }
 }
