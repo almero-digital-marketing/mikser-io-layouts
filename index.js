@@ -19,6 +19,7 @@ import _ from 'lodash'
 import {
     gateChecksum, sweepDeleted, scanSummary,
     checksumsByCollection,
+    useDatabase,
 } from 'mikser-io'
 
 import { createInspect } from './lib/inspect.js'
@@ -79,7 +80,7 @@ export function layouts(options = {}) {
         // a later plugin's onLoaded can see it. Matches the preview plugin
         // pattern (`runtime.options.preview = { store, get, stats, config }`).
         runtime.options.layouts = {
-            inspect: createInspect({ findEntity, findEntities, collection }),
+            inspect: createInspect({ runtime, findEntity, findEntities, useDatabase, collection }),
         }
 
         onSync(collection, async ({ action, context }) => {
