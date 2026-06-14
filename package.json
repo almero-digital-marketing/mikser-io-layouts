@@ -1,0 +1,28 @@
+{
+  "name": "mikser-io-layouts",
+  "version": "1.0.0",
+  "description": "SSG-flavor task-production policy for mikser-io. Multi-match layout assignment, per-layout destinations, postprocess chain attachment, layout inspection.",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "node --no-warnings --test --test-reporter=spec 'test/**/*.test.js'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/almero-digital-marketing/mikser-io-layouts.git"
+  },
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/almero-digital-marketing/mikser-io-layouts/issues"
+  },
+  "homepage": "https://github.com/almero-digital-marketing/mikser-io-layouts#readme",
+  "peerDependencies": {
+    "mikser-io": "^9.0.0"
+  },
+  "dependencies": {
+    "globby": "^14.0.0",
+    "handlebars": "^4.7.0",
+    "lodash": "^4.17.0"
+  }
+}
