@@ -242,7 +242,12 @@ export function layouts(options = {}) {
                 }
                 await deleteEntity({ id: e.id, type, collection })
                 logger.debug('Layouts removed (file gone): %s', e.name)
-            })
+            }, runtime.options.layoutsFolder)
+            // ownerPrefix: the layouts folder. Sweep stays scoped to
+            // entities whose uri is rooted there; foreign entries in
+            // the `layouts` collection (none in practice today, but
+            // future MCP-served / API-injected layouts get the same
+            // protection as CSV-emitted documents).
 
             logger.info(scanSummary({ cap: 'Layouts', loaded: paths.length, ...stats }))
         })
