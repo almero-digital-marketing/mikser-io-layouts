@@ -25,5 +25,8 @@
     "handlebars": "^4.7.0",
     "lodash": "^4.17.0",
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "mikser-io": "file:../mikser-io"
   }
 }
