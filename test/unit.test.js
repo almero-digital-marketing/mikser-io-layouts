@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { format } from 'node:util'
 import { mkdtemp, rm, access, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -119,6 +120,74 @@ describe('layouts plugin', () => {
             // this entity with meta.href set" — verified end-to-end by
             // the scenario tests against a real subprocess + sqlite.
             // Unit-level we just check the entity got its layout.
+        })
+    })
+
+    it('warns once about a match pattern that selected nothing', async () => {
+        // A pattern selecting zero entities used to be completely silent —
+        // no warn, no debug — so a typo'd or missing language segment lost a
+        // whole section while the build went green.
+        await withTempWorking(async (workingFolder) => {
+            const h = createHarness({
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out') },
+            })
+            layouts({
+                autoLayouts: false,
+                match: {
+                    // matchEntity globs entity.name only for '@/' patterns;
+                    // everything else globs entity.id. Both forms here, so
+                    // the test pins the real rule rather than the loose
+                    // "patterns match name" summary.
+                    '@/post':            'post',      // matches name
+                    '/documents/post.md': 'post',      // matches id
+                    'nonesuch/*':        'section',   // matches neither
+                },
+            })(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'post.hbs' } })
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'section.hbs' } })
+
+            const doc = { id: '/documents/post.md', collection: 'documents', name: 'post', format: 'md', meta: {} }
+            h.journal.push({ id: 1, entity: doc, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+
+            const warnings = h.logs.filter(l =>
+                l.level === 'warn' && l.args.join(' ').includes('Layout pattern'))
+            assert.equal(warnings.length, 1, `expected one warning, got ${warnings.length}`)
+            // The harness records (format, ...args) unformatted, so render it
+            // the way the logger would before asserting on the message.
+            const text = format(...warnings[0].args)
+            assert.match(text, /nonesuch/, 'names the pattern that matched nothing')
+            assert.ok(!text.includes("'post'"), 'must not name the pattern that DID match')
+            assert.match(text, /matched against entity\.id/, 'names the field this pattern is matched against')
+            assert.match(text, /'@\/'/, "points at the '@/' prefix for name matching")
+            assert.match(text, /--force/, 'tells the reader how to check the whole catalog')
+        })
+    })
+
+    it('does not repeat the pattern warning on a second cycle', async () => {
+        // Watch mode runs onProcessed per cycle; a warning per cycle would be
+        // noise, so it is reported once per process.
+        await withTempWorking(async (workingFolder) => {
+            const h = createHarness({
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out') },
+            })
+            layouts({ autoLayouts: false, match: { 'nonesuch/*': 'section' } })(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'section.hbs' } })
+
+            for (const id of [1, 2]) {
+                h.journal.push({
+                    id,
+                    entity: { id: `/documents/p${id}.md`, collection: 'documents', name: `p${id}`, format: 'md', meta: {} },
+                    operation: 'create', context: {}, options: {}, output: null,
+                })
+                await h.runHook('processed', { aborted: false })
+            }
+
+            const warnings = h.logs.filter(l =>
+                l.level === 'warn' && l.args.join(' ').includes('Layout pattern'))
+            assert.equal(warnings.length, 1, 'warned once, not once per cycle')
         })
     })
 
