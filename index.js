@@ -27,7 +27,16 @@ import { createOnProcessed } from './lib/matching.js'
 import { createOnBeforeRender } from './lib/assembly.js'
 import { registerMcpTools } from './lib/mcp.js'
 
-export function layouts(options = {}) {
+export function layouts(userOptions = {}) {
+    // cleanUrls DEFAULTS TO TRUE. It previously had no default, so unset it
+    // was falsy and pages landed at `hera.html` instead of `hera/index.html`
+    // — while the README's options block presented `cleanUrls: true` in a way
+    // that reads as a defaults table. There was no warning, the site worked,
+    // and the wrong URL shape was everywhere: the kind of thing discovered
+    // after canonical tags and hreflang are wired against the shape you
+    // assumed. Defaulting it matches both the README and what almost every
+    // site wants; pass `cleanUrls: false` for flat output.
+    const options = { cleanUrls: true, ...userOptions }
     return ({
         runtime,
         onLoaded,

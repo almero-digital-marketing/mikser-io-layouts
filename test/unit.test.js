@@ -713,7 +713,9 @@ describe('layouts plugin: multi-layouts (collision)', () => {
 
             assert.equal(h.renderTasks.length, 2, 'one task per layout, different extensions')
             const destinations = h.renderTasks.map(t => t.entity.destination).sort()
-            assert.deepEqual(destinations, ['/blog/welcome.eml', '/blog/welcome.html'])
+            // cleanUrls defaults to true and applies to `html` ONLY, so the
+            // page folds into a folder while the email keeps its flat name.
+            assert.deepEqual(destinations, ['/blog/welcome.eml', '/blog/welcome/index.html'])
         })
     })
 })
@@ -781,5 +783,159 @@ describe('layouts plugin: multi-layouts (destination template)', () => {
                 /path-traversal/,
             )
         })
+    })
+})
+
+describe('layouts plugin: destination is persisted (mikser-io#1)', () => {
+    // entity.destination used to exist only as a per-render-task field and
+    // was never written back, so the catalog had none — and runtime.href(),
+    // which needs the TARGET's destination to build a relative URL, fell
+    // through and returned the whole entity instead of { url }.
+    async function processOne({ layoutFile, entity, options }) {
+        return withTempWorking(async (workingFolder) => {
+            const h = createHarness({
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out') },
+            })
+            layouts(options)(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: layoutFile } })
+            h.journal.push({ id: 1, entity, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+            return entity
+        })
+    }
+
+    const doc = (name) => ({
+        id: `/documents/${name}.md`, collection: 'documents', name, format: 'md', meta: {},
+    })
+
+    it('stamps a cleanUrls destination onto the entity', async () => {
+        const out = await processOne({
+            layoutFile: 'page.hbs',
+            entity: { ...doc('contacts'), meta: { layout: 'page' } },
+            options: { cleanUrls: true },
+        })
+        assert.equal(out.destination, '/contacts/index.html')
+    })
+
+    it('stamps a flat destination when cleanUrls is off', async () => {
+        const out = await processOne({
+            layoutFile: 'page.hbs',
+            entity: { ...doc('contacts'), meta: { layout: 'page' } },
+            options: { cleanUrls: false },
+        })
+        assert.equal(out.destination, '/contacts.html')
+    })
+
+    it('leaves an index page flat — cleanUrls already special-cases it', async () => {
+        const out = await processOne({
+            layoutFile: 'page.hbs',
+            entity: { ...doc('index'), meta: { layout: 'page' } },
+            options: { cleanUrls: true },
+        })
+        assert.equal(out.destination, '/index.html')
+    })
+
+    it('is absent when no layout matched, rather than a bogus path', async () => {
+        const out = await processOne({
+            layoutFile: 'page.hbs',
+            entity: doc('orphan'),
+            options: { autoLayouts: false, match: {} },
+        })
+        assert.equal(out.destination, undefined)
+    })
+})
+
+describe('layouts plugin: cleanUrls default (layouts#1)', () => {
+    // It had no default, so unset it was falsy and pages landed at
+    // `hera.html` — while the README's options block read as a defaults
+    // table showing `cleanUrls: true`. No warning, site works, wrong URL
+    // shape everywhere.
+    async function destinationFor(options) {
+        return withTempWorking(async (workingFolder) => {
+            const h = createHarness({
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out') },
+            })
+            layouts(options)(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'page.hbs' } })
+            const entity = {
+                id: '/documents/hera.md', collection: 'documents', name: 'hera',
+                format: 'md', meta: { layout: 'page' },
+            }
+            h.journal.push({ id: 1, entity, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+            return entity.destination
+        })
+    }
+
+    it('defaults to on', async () => {
+        assert.equal(await destinationFor({}), '/hera/index.html')
+    })
+
+    it('false still gives flat output', async () => {
+        assert.equal(await destinationFor({ cleanUrls: false }), '/hera.html')
+    })
+
+    it('explicit true is the same as the default', async () => {
+        assert.equal(await destinationFor({ cleanUrls: true }), '/hera/index.html')
+    })
+})
+
+describe('layouts plugin: destination template helpers (layouts#3)', () => {
+    // Without helpers a template can only interpolate whole values, so a
+    // path cannot be derived from PART of entity.name — which blocks
+    // per-language output roots on a catalog holding several languages.
+    const render = async (tpl, entity) => {
+        const { compileDestinationTemplate } = await import('../lib/destination.js')
+        return compileDestinationTemplate(tpl)({ entity })
+    }
+
+    it('strips a leading language segment — the case that needed this', async () => {
+        assert.equal(
+            await render("/{{ after entity.name '/' }}/index.html", { name: 'bg/kontakti' }),
+            '/kontakti/index.html')
+    })
+
+    it('keeps the rest of a nested path intact', async () => {
+        assert.equal(
+            await render("/{{ after entity.name '/' }}/index.html", { name: 'bg/web/booking' }),
+            '/web/booking/index.html')
+    })
+
+    it('replace is literal, not a regex', async () => {
+        // A destination is a path; a stray metacharacter must not silently
+        // change what matches.
+        assert.equal(await render("/{{ replace entity.name '.' '-' }}", { name: 'a.b.c' }), '/a-b-c')
+        assert.equal(await render("/{{ replace entity.name 'a.c' 'X' }}", { name: 'abc' }), '/abc')
+    })
+
+    it('covers the path-shaping set', async () => {
+        assert.equal(await render('/{{ before entity.name "/" }}', { name: 'bg/x' }), '/bg')
+        assert.equal(await render('/{{ afterLast entity.name "/" }}', { name: 'a/b/c' }), '/c')
+        assert.equal(await render('/{{ beforeLast entity.name "/" }}', { name: 'a/b/c' }), '/a/b')
+        assert.equal(await render('/{{ dirname entity.name }}', { name: 'a/b/c' }), '/a/b')
+        assert.equal(await render('/{{ basename entity.name }}', { name: 'a/b/c' }), '/c')
+        assert.equal(await render('/{{ lower entity.name }}', { name: 'A/B' }), '/a/b')
+        assert.equal(await render('/{{ upper entity.name }}', { name: 'a' }), '/A')
+    })
+
+    it('handles a missing value without emitting "undefined" into a path', async () => {
+        assert.equal(await render("/{{ after entity.nope '/' }}x", { name: 'a' }), '/x')
+    })
+
+    it('does not register helpers on the shared handlebars instance', async () => {
+        // Registering on the default export would leak `replace` into a
+        // project's own renderHbs layouts, appearing from nowhere.
+        const handlebars = (await import('handlebars')).default
+        for (const name of ['after', 'before', 'replace', 'dirname', 'basename']) {
+            assert.equal(handlebars.helpers[name], undefined, `${name} leaked globally`)
+        }
+    })
+
+    it('still rejects path traversal after helpers run', async () => {
+        const { compileDestinationTemplate, sanitizeDestination } = await import('../lib/destination.js')
+        const out = compileDestinationTemplate("/{{ after entity.name '/' }}")({ entity: { name: 'x/../../etc/passwd' } })
+        assert.throws(() => sanitizeDestination(out), /path-traversal/)
     })
 })

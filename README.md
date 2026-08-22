@@ -30,9 +30,11 @@ export default {
 
 ## Factory options
 
+Every value below is the **default**; pass an option only to change it.
+
 ```js
 layouts({
-  layoutsFolder: 'layouts',    // default: 'layouts'
+  layoutsFolder: 'layouts',
 
   // Each pattern that matches contributes a render task. Multi-match:
   // an entity at /blog/welcome.md matches both '@/blog/*' (post) AND
@@ -44,8 +46,19 @@ layouts({
   },
 
   autoLayouts: true,           // Auto-match by name (single-match fallback; see below)
-  cleanUrls: true              // /page.html → /page/index.html
+  cleanUrls: true,             // /page → /page/index.html, so the served URL is /page/
 })
+```
+
+`cleanUrls` already special-cases names ending in `index` (`index` stays
+`/index.html`, it does not become `/index/index.html`). Reaching for a
+`destination:` template to get pretty URLs reinvents this — and breaks index
+pages, because the template fully overrides the transform.
+
+`match` has no default: with no patterns and `autoLayouts` on, layouts are
+found by name.
+
+```js
 ```
 
 ## Per-entity selection — `meta.layout` / `meta.layouts`
@@ -81,6 +94,29 @@ Cross-directory auto-matching is intentionally not supported — pair `posts/art
 ## Per-layout destination override
 
 A layout's frontmatter can declare a `destination:` template. The template is Handlebars (path-shaped — substitutions only, no body rendering); it gets `{ entity }` as the context, is compiled once and cached, and the result is path-sanitized (`..` segments rejected). This fully overrides the default `entity.name + .format` derivation (and the cleanUrls folder transform).
+
+A small set of path-shaping helpers is available, so a destination can be
+derived from *part* of a value rather than only interpolating whole ones:
+
+| helper | |
+| --- | --- |
+| `after v sep` / `before v sep` | split at the **first** separator |
+| `afterLast v sep` / `beforeLast v sep` | split at the **last** separator |
+| `replace v search replacement` | literal, every occurrence — not a regex |
+| `dirname v` / `basename v` | POSIX path parts |
+| `lower v` / `upper v` | case |
+
+The case they exist for is per-language output roots. With three languages in
+one catalog under `documents/{lang}/…`, `entity.name` is `bg/kontakti` and each
+language wants its own document root:
+
+```yaml
+destination: /{{ after entity.name '/' }}/index.html   # → /kontakti/index.html
+```
+
+They are registered on an **isolated** Handlebars instance, so nothing appears
+in your own `renderHbs` layouts. Anything more than path slicing belongs in the
+layout's `.js` sidecar rather than in a template.
 
 ```yaml
 # layouts/post-card.html.hbs
