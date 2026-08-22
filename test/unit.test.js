@@ -124,12 +124,16 @@ describe('layouts plugin', () => {
     })
 
     it('warns once about a match pattern that selected nothing', async () => {
-        // A pattern selecting zero entities used to be completely silent —
-        // no warn, no debug — so a typo'd or missing language segment lost a
-        // whole section while the build went green.
+        // A pattern selecting zero entities is otherwise completely silent —
+        // no warn, no debug — so a typo'd or missing language segment loses a
+        // whole section while the build goes green.
+        //
+        // `force` makes this a full cycle. The warning is gated on that,
+        // because on an incremental run the evaluated set is whatever changed
+        // and a healthy pattern legitimately matches none of it.
         await withTempWorking(async (workingFolder) => {
             const h = createHarness({
-                options: { workingFolder, outputFolder: path.join(workingFolder, 'out') },
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out'), force: true },
             })
             layouts({
                 autoLayouts: false,
@@ -161,7 +165,42 @@ describe('layouts plugin', () => {
             assert.ok(!text.includes("'post'"), 'must not name the pattern that DID match')
             assert.match(text, /matched against entity\.id/, 'names the field this pattern is matched against')
             assert.match(text, /'@\/'/, "points at the '@/' prefix for name matching")
-            assert.match(text, /--force/, 'tells the reader how to check the whole catalog')
+            // No longer advises --force: the warning only fires on a full
+            // cycle now, so the advice would be telling the reader to do what
+            // they have already done.
+            assert.ok(!text.includes('--force'), 'does not advise what the reader just did')
+        })
+    })
+
+    it('stays silent about an unmatched pattern on an incremental cycle', async () => {
+        // The inverse of the test above, and the reason the gate exists. An
+        // incremental run re-evaluates only what changed, so a pattern that
+        // matches plenty of documents matches none of the two entities in a
+        // settled build. Warning there fires on every healthy build, and a
+        // warning that always fires is one the reader filters out — taking
+        // the real instance with it.
+        await withTempWorking(async (workingFolder) => {
+            const h = createHarness({
+                // No `force`, no `firstRun`, no cache invalidation.
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out') },
+            })
+            layouts({ autoLayouts: false, match: { 'nonesuch/*': 'section' } })(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'section.hbs' } })
+
+            const doc = {
+                id: '/documents/post.md', name: 'post', collection: 'documents',
+                type: 'document', format: 'md', meta: {},
+            }
+            h.journal.push({ id: 1, entity: doc, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+
+            const warnings = h.logs.filter(l =>
+                l.level === 'warn' && l.args.join(' ').includes('Layout pattern'))
+            assert.deepEqual(
+                warnings, [],
+                'an incremental cycle cannot support the conclusion, so it must not draw it',
+            )
         })
     })
 
@@ -170,7 +209,7 @@ describe('layouts plugin', () => {
         // noise, so it is reported once per process.
         await withTempWorking(async (workingFolder) => {
             const h = createHarness({
-                options: { workingFolder, outputFolder: path.join(workingFolder, 'out') },
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out'), force: true },
             })
             layouts({ autoLayouts: false, match: { 'nonesuch/*': 'section' } })(h.core)
             await h.runHook('loaded')

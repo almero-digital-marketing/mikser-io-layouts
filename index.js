@@ -27,6 +27,7 @@ import {
 import { createInspect } from './lib/inspect.js'
 import { createOnProcessed } from './lib/matching.js'
 import { createOnBeforeRender } from './lib/assembly.js'
+import { installSidecarModuleHook } from './lib/sidecar-modules.js'
 import { registerMcpTools } from './lib/mcp.js'
 
 export function layouts(userOptions = {}) {
@@ -206,6 +207,12 @@ export function layouts(userOptions = {}) {
 
             logger.debug('Layouts folder: %s', runtime.options.layoutsFolder)
             await mkdir(runtime.options.layoutsFolder, { recursive: true })
+
+            // Keyed by the shared sidecar digest, so a module a sidecar
+            // imports is re-evaluated when any .js under this folder changes
+            // and served from cache when none has. Without it only the
+            // sidecar entry point reloads.
+            installSidecarModuleHook({ layoutsFolder: runtime.options.layoutsFolder, logger })
 
             watch(collection, runtime.options.layoutsFolder)
 
