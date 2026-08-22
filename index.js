@@ -19,6 +19,7 @@ import _ from 'lodash'
 import {
     gateChecksum, sweepDeleted, scanSummary,
     checksumsByCollection,
+    checksum as fileChecksum, checksumOf,
     useDatabase,
 } from 'mikser-io'
 
@@ -104,7 +105,29 @@ export function layouts(userOptions = {}) {
 
         onSync(collection, async ({ action, context }) => {
             if (!context.relativePath) return false
+            const logger = useLogger()
             const { relativePath } = context
+
+            // A .js file under the layouts folder is a SIDECAR (or something
+            // a sidecar imports), never a layout. It used to have its `.js`
+            // stripped and be created as an entity, which produced a phantom
+            // `/layouts/page` — holding JS source as its content — beside the
+            // real `/layouts/page.liquid`.
+            //
+            // Sidecars are inputs to a layout's checksum instead (see
+            // sidecarInputs above), so the right response to one changing is
+            // to re-run the layouts scan: it recomputes every composite and
+            // emits an UPDATE for whichever layouts actually moved, which is
+            // what makes their dependents re-render.
+            if (_.endsWith(relativePath, '.js') && isSidecarScript(relativePath)) {
+                logger.debug('Layouts sidecar changed (%s) — rescanning layouts', relativePath)
+                await rescanLayouts()
+                return
+            }
+
+            // A JS-authored layout (post.hbs.js) keeps its historical
+            // behaviour: the trailing .js is dropped so the id is
+            // /layouts/post.hbs.
             let id = path.join(`/${collection}`, relativePath)
             if (_.endsWith(id, '.js')) id = id.replace(new RegExp('.js$'), '')
 
@@ -196,10 +219,72 @@ export function layouts(userOptions = {}) {
             }
         })
 
-        onImport(async () => {
+        // A layout's `.js` sidecar is where a mikser site's data layer lives,
+        // and it was the one file in the project that could be edited without
+        // effect: `.js` is excluded from the scan below, so the sidecar was
+        // not an entity, not watched as an input, and not part of any hash.
+        // Nothing depended on it, so nothing re-rendered — silently, and
+        // looking exactly like a bug in your own code.
+        //
+        // Fixed by folding sidecars into the LAYOUT's checksum rather than
+        // making them entities. A sidecar is an input to a layout, not a
+        // thing a site has; giving it an entity would put JS source in the
+        // catalog and (via the id-stripping in onSync) a phantom
+        // `/layouts/page` alongside the real `/layouts/page.liquid`.
+        //
+        // Two components:
+        //   own     — the layout's own sidecar, `<name>.js`
+        //   shared  — every OTHER .js under the folder, as one digest
+        //
+        // `shared` is coarse on purpose: a sidecar's own imports
+        // (layouts/lib/context.js and friends) would otherwise need a module
+        // graph walk. Treating any shared .js change as invalidating every
+        // layout is what the folder can afford — tens of files, not
+        // thousands — and it is predictable, which a partial graph walk
+        // would not be.
+        // NOT every .js under the folder is a sidecar. `post.hbs.js` is a
+        // LAYOUT — a template written as JS, whose id drops the trailing .js
+        // to become /layouts/post.hbs. `post.js` is the sidecar for layout
+        // `post`. The discriminator is whether stripping `.js` leaves a
+        // further extension:
+        //
+        //   post.js        → post        no extension  → sidecar
+        //   lib/context.js → lib/context no extension  → sidecar-adjacent
+        //   post.hbs.js    → post.hbs    .hbs          → layout, leave alone
+        //
+        // Getting this wrong turns every JS-authored layout into a
+        // non-entity, which is why it is a rule and not a guess.
+        const isSidecarScript = (rel) => path.extname(rel.replace(/\.js$/, '')) === ''
+
+        async function sidecarInputs() {
+            const scriptPaths = (await globby('**/*.js', { cwd: runtime.options.layoutsFolder }))
+                .filter(isSidecarScript)
+            const own = new Map()
+            const shared = []
+            for (const rel of scriptPaths.sort()) {
+                const sum = await fileChecksum(path.join(runtime.options.layoutsFolder, rel))
+                own.set(rel.replace(/\.js$/, ''), sum)
+                shared.push(`${rel}:${sum}`)
+            }
+            return { own, sharedDigest: shared.length ? checksumOf(shared.join('\n')) : '' }
+        }
+
+        // The value the checksum gate compares. Passed as `bytes` so the gate
+        // keeps owning the --force / cache-invalidated / prior-checksum
+        // logic instead of this plugin reimplementing it.
+        async function layoutInputBytes(uri, name, inputs) {
+            const template = await fileChecksum(uri)
+            const sidecar = inputs.own.get(name) ?? ''
+            return Buffer.from(`${template}:${sidecar}:${inputs.sharedDigest}`, 'utf8')
+        }
+
+        // Named so onSync can re-run it when a sidecar changes. A function
+        // declaration, so it is hoisted above the onSync registration above.
+        async function rescanLayouts() {
             const { layouts } = runtime.state.layouts
             const logger = useLogger()
             const paths = await globby('**/*', { cwd: runtime.options.layoutsFolder, ignore: ['**/*.js'] })
+            const inputs = await sidecarInputs()
             const scanned = new Set()
             const stats = { emitted: 0, skipped: 0, deleted: 0 }
 
@@ -221,7 +306,11 @@ export function layouts(userOptions = {}) {
                 const id = path.join('/layouts', relativePath)
                 scanned.add(id)
 
-                const chksum = await gateChecksum(uri, id, { priorChecksums })
+                const name = relativePath.replace(path.extname(relativePath), '')
+                const chksum = await gateChecksum(uri, id, {
+                    priorChecksums,
+                    bytes: await layoutInputBytes(uri, name, inputs),
+                })
                 if (chksum === null) {
                     stats.skipped++
                     continue
@@ -234,6 +323,15 @@ export function layouts(userOptions = {}) {
                     type,
                     content: await readLayoutContent(uri),
                     checksum: chksum,
+                    // Declared so inputHashOf folds the sidecars into this
+                    // layout's input hash. Without it the gate checksum
+                    // moves but the hash does not — an entity that has
+                    // content is hashed on {meta, content} — so consumers
+                    // still skip and the sidecar edit reaches nothing.
+                    inputs: {
+                        sidecar: inputs.own.get(name) ?? null,
+                        shared: inputs.sharedDigest || null,
+                    },
                 }
                 Object.assign(layout, await getFormatInfo(relativePath))
                 layouts[layout.name] = layout
@@ -259,7 +357,9 @@ export function layouts(userOptions = {}) {
             // protection as CSV-emitted documents).
 
             logger.info(scanSummary({ cap: 'Layouts', loaded: paths.length, ...stats }))
-        })
+        }
+
+        onImport(rescanLayouts)
 
         // Matching + assembly are extracted to lib/ for cognitive load
         // (~185 + ~360 lines respectively). They still close over the

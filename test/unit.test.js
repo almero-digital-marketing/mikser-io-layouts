@@ -939,3 +939,82 @@ describe('layouts plugin: destination template helpers (layouts#3)', () => {
         assert.throws(() => sanitizeDestination(out), /path-traversal/)
     })
 })
+
+describe('layouts plugin: a sidecar is a tracked input (layouts#4)', () => {
+    // The sidecar is where a mikser site's data layer lives, and it was the
+    // one file that could be edited without effect: `.js` is excluded from
+    // the scan, so it was not an entity, not watched as an input, and not
+    // part of any hash. Nothing depended on it, so nothing re-rendered —
+    // silently, looking exactly like a bug in your own code.
+    async function scan(files, { existing = [] } = {}) {
+        return withTempWorking(async (workingFolder) => {
+            const layoutsFolder = path.join(workingFolder, 'layouts')
+            await mkdir(path.join(layoutsFolder, 'lib'), { recursive: true })
+            for (const [rel, body] of Object.entries(files)) {
+                await writeFile(path.join(layoutsFolder, rel), body)
+            }
+            const h = createHarness({
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out') },
+                entities: existing,
+            })
+            layouts()(h.core)
+            await h.runHook('loaded')
+            await h.runHook('import')
+            const created = h.journal.filter(e => ['create', 'update'].includes(e.operation))
+            return { h, layoutsFolder, emitted: created.map(e => e.entity), checksums:
+                Object.fromEntries(created.map(e => [e.entity.name, e.entity.checksum])) }
+        })
+    }
+
+    it('folds the sidecar into the layout checksum, so editing it changes the hash', async () => {
+        const before = await scan({ 'page.liquid': '<p>x</p>', 'page.js': 'export const load = () => ({ a: 1 })' })
+        const after  = await scan({ 'page.liquid': '<p>x</p>', 'page.js': 'export const load = () => ({ a: 2 })' })
+        assert.ok(before.checksums.page, 'the layout was emitted')
+        assert.notEqual(before.checksums.page, after.checksums.page,
+                        'a sidecar edit must change the layout checksum')
+    })
+
+    it('an unchanged sidecar leaves the checksum alone', async () => {
+        const a = await scan({ 'page.liquid': '<p>x</p>', 'page.js': 'export const load = () => ({})' })
+        const b = await scan({ 'page.liquid': '<p>x</p>', 'page.js': 'export const load = () => ({})' })
+        assert.equal(a.checksums.page, b.checksums.page)
+    })
+
+    it('a SHARED script under the folder invalidates every layout', async () => {
+        // A sidecar's own imports (layouts/lib/context.js and friends) would
+        // otherwise need a module-graph walk. Treating any shared .js change
+        // as invalidating every layout is what a layouts folder can afford,
+        // and it is predictable — which a partial graph walk would not be.
+        const before = await scan({
+            'page.liquid': '<p>x</p>', 'post.liquid': '<p>y</p>',
+            'lib/context.js': 'export const chrome = 1',
+        })
+        const after = await scan({
+            'page.liquid': '<p>x</p>', 'post.liquid': '<p>y</p>',
+            'lib/context.js': 'export const chrome = 2',
+        })
+        assert.notEqual(before.checksums.page, after.checksums.page)
+        assert.notEqual(before.checksums.post, after.checksums.post)
+    })
+
+    it('does not make an entity out of a sidecar', async () => {
+        // Giving it one would put JS source in the catalog, and via onSync's
+        // id-stripping produce a phantom /layouts/page beside the real
+        // /layouts/page.liquid.
+        const { emitted } = await scan({ 'page.liquid': '<p>x</p>', 'page.js': 'export const load = () => ({})' })
+        assert.deepEqual(emitted.map(e => e.id).sort(), ['/layouts/page.liquid'])
+    })
+
+    it('still treats a JS-AUTHORED layout as a layout, not a sidecar', async () => {
+        // post.hbs.js is a template written as JS; its id drops the trailing
+        // .js. Only a .js whose remaining name has no extension is a sidecar.
+        await withTempWorking(async (workingFolder) => {
+            const h = createHarness({ options: { workingFolder, outputFolder: path.join(workingFolder, 'out') } })
+            layouts()(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'post.hbs.js' } })
+            const entry = h.journal.find(e => e.operation === 'create')
+            assert.equal(entry.entity.id, '/layouts/post.hbs')
+        })
+    })
+})
