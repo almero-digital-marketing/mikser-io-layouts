@@ -110,9 +110,9 @@ export function layouts(userOptions = {}) {
             const { relativePath } = context
 
             // A .js file under the layouts folder is a SIDECAR (or something
-            // a sidecar imports), never a layout. It used to have its `.js`
-            // stripped and be created as an entity, which produced a phantom
-            // `/layouts/page` — holding JS source as its content — beside the
+            // a sidecar imports), never a layout. Treating one as a layout —
+            // stripping its `.js` and creating an entity — yields a phantom
+            // `/layouts/page` holding JS source as its content, beside the
             // real `/layouts/page.liquid`.
             //
             // Sidecars are inputs to a layout's checksum instead (see
@@ -410,12 +410,12 @@ export function layouts(userOptions = {}) {
                 if (!skipWrite) {
                     const destinationFile = path.join(writeBase, entity.destination)
                     // writeOutput skips the write when the bytes already on
-                    // disk are identical. Invalidation is deliberately
-                    // conservative — an entity that merely READ another
-                    // re-renders, because the engine cannot know which field
-                    // was read — so byte-identical output is routine, and
-                    // rewriting it moved mtime for live-reload, rsync and
-                    // `find -newer` alike. mkdir/unlink moved inside it.
+                    // disk are identical, and owns the mkdir/unlink.
+                    // Invalidation is deliberately conservative — an entity
+                    // that merely READS another re-renders, since the engine
+                    // cannot know which field was read — so byte-identical
+                    // output is routine, and rewriting it moves mtime for
+                    // live-reload, rsync and `find -newer` alike.
                     const wrote = await writeOutput(destinationFile, output.result)
                     if (wrote) {
                         logger.debug('Layout render finished: %s', entity.destination.replace(runtime.options.workingFolder, ''))
