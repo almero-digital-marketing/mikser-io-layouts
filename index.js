@@ -21,6 +21,7 @@ import {
     checksumsByCollection,
     checksum as fileChecksum, checksumOf,
     useDatabase,
+    writeOutput, reportUnchanged,
 } from 'mikser-io'
 
 import { createInspect } from './lib/inspect.js'
@@ -408,12 +409,20 @@ export function layouts(userOptions = {}) {
 
                 if (!skipWrite) {
                     const destinationFile = path.join(writeBase, entity.destination)
-                    await mkdir(path.dirname(destinationFile), { recursive: true })
-                    try {
-                        await unlink(destinationFile)
-                    } catch { }
-                    await writeFile(destinationFile, output.result)
-                    logger.debug('Layout render finished: %s', entity.destination.replace(runtime.options.workingFolder, ''))
+                    // writeOutput skips the write when the bytes already on
+                    // disk are identical. Invalidation is deliberately
+                    // conservative — an entity that merely READ another
+                    // re-renders, because the engine cannot know which field
+                    // was read — so byte-identical output is routine, and
+                    // rewriting it moved mtime for live-reload, rsync and
+                    // `find -newer` alike. mkdir/unlink moved inside it.
+                    const wrote = await writeOutput(destinationFile, output.result)
+                    if (wrote) {
+                        logger.debug('Layout render finished: %s', entity.destination.replace(runtime.options.workingFolder, ''))
+                    } else {
+                        reportUnchanged(entity)
+                        logger.debug('Layout render finished, output unchanged: %s', entity.destination.replace(runtime.options.workingFolder, ''))
+                    }
                 } else {
                     logger.debug('Layout render finished (save:false, bytes only): %s', entity.id)
                 }
