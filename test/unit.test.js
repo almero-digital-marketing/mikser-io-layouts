@@ -158,9 +158,15 @@ describe('layouts plugin', () => {
             const warnings = h.logs.filter(l =>
                 l.level === 'warn' && l.args.join(' ').includes('Layout pattern'))
             assert.equal(warnings.length, 1, `expected one warning, got ${warnings.length}`)
-            // The harness records (format, ...args) unformatted, so render it
-            // the way the logger would before asserting on the message.
-            const text = format(...warnings[0].args)
+            // Structured first, sentence second — the call is
+            // logger.warn({ code, ... }, msg, ...values), and the fields are
+            // what the build report keys on. The harness records the args
+            // unformatted, so render the message the way the logger would.
+            const [fields, ...message] = warnings[0].args
+            assert.equal(fields.code, 'layout-pattern-no-match', 'carries the code the report is asserted on')
+            assert.equal(fields.pattern, 'nonesuch/*')
+            assert.equal(fields.matchedAgainst, 'id')
+            const text = format(...message)
             assert.match(text, /nonesuch/, 'names the pattern that matched nothing')
             assert.ok(!text.includes("'post'"), 'must not name the pattern that DID match')
             assert.match(text, /matched against entity\.id/, 'names the field this pattern is matched against')
