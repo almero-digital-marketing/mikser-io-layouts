@@ -198,7 +198,8 @@ describe('mikser_check_entity: a page', () => {
         const r = await check('/documents/extra.md')
         assert.ok(r.unused.includes('card'), `unused: ${r.unused.join(', ')}`)
         assert.deepEqual(r.missing, [], 'an unused key is not a missing one')
-        assert.ok(r.notes.some(n => /DIFFERENT layout/.test(n)))
+        assert.ok(r.notes.some(n => /another layout or an API client/.test(n)),
+            'the caveat has to travel with the finding')
     })
 
     it('never reports engine-owned keys as unused', async () => {
@@ -214,7 +215,8 @@ describe('mikser_check_entity: a page', () => {
         const r = await check('/documents/ghost.md')
         assert.deepEqual(r.unresolvedSections, ['nosuchsection'])
         assert.deepEqual(r.missing, [], 'an unresolved section is not a missing key')
-        assert.ok(r.notes.some(n => /unresolvedSections/.test(n) && /never fails/.test(n)))
+        assert.ok(r.notes.some(n => /unresolvedSections/.test(n) && /defect/.test(n)),
+            'it must be named as something to look at, not a failure')
     })
 
     it('uses the layout the entity actually rendered with', async () => {
@@ -233,7 +235,7 @@ describe('mikser_check_entity: not a page', () => {
         assert.equal(r.kind, 'data')
         assert.deepEqual(r.consumedBy, ['/documents/good.md'])
         assert.ok(!JSON.stringify(r.notes).includes('build once'))
-        assert.ok(r.notes.some(n => /hole in the pages listed above/.test(n)),
+        assert.ok(r.notes.some(n => /hole in those pages/.test(n)),
             'it has to say where a mistake would actually show up')
     })
 
@@ -260,7 +262,8 @@ describe('mikser_check_entity: not a page', () => {
         const group = r.untraceable.find(g => g.under === 'enquiry')
         assert.ok(group, `expected them collapsed under enquiry, got ${JSON.stringify(r.untraceable)}`)
         assert.ok(group.keys.includes('enquiry.fields[].label'))
-        assert.ok(r.notes.some(n => /Treat them as consumed/.test(n)))
+        assert.ok(r.notes.some(n => /untraceable/.test(n) && /could not be followed/.test(n)),
+            'the reason it cannot be judged has to travel with it')
     })
 
     it('still reports a key nothing read at all', async () => {
@@ -384,7 +387,7 @@ describe('mikser_check_entity: with a declared schema', () => {
     it('labels an inferred contract as inferred when there is no schema', async () => {
         const r = await check('/documents/good.md')
         assert.equal(r.missingFrom, 'inferred')
-        assert.ok(r.notes.some(n => /has been wrong/.test(n)),
+        assert.ok(r.notes.some(n => /strong evidence rather than proof/.test(n)),
             'the weaker source has to say that it is weaker')
     })
 })
@@ -460,7 +463,7 @@ describe('mikser_check_entity: peer comparison', () => {
     it('never fails the check — it is a prompt, not a defect', async () => {
         const r = await peerCheck('/documents/cat-gap.md')
         assert.notEqual(r.kind, undefined)
-        assert.ok(r.notes.some(n => /Weak evidence, never a failure|never a failure/.test(n)),
+        assert.ok(r.notes.some(n => /peerGaps/.test(n) && /defect|only check possible/.test(n)),
             'the weakness has to travel with the finding')
     })
 
