@@ -1042,12 +1042,47 @@ describe('layouts plugin: a sidecar is a tracked input (layouts#4)', () => {
         assert.notEqual(before.checksums.post, after.checksums.post)
     })
 
-    it('does not make an entity out of a sidecar', async () => {
-        // Giving it one would put JS source in the catalog, and via onSync's
-        // id-stripping produce a phantom /layouts/page beside the real
-        // /layouts/page.liquid.
+    it('catalogues a sidecar as an entity of its own', async () => {
+        // A sidecar is where a site's data layer lives, and it used to be the
+        // one source file no tool could read, search or resolve: an agent could
+        // see what a template does but not what feeds it.
         const { emitted } = await scan({ 'page.liquid': '<p>x</p>', 'page.js': 'export const load = () => ({})' })
-        assert.deepEqual(emitted.map(e => e.id).sort(), ['/layouts/page.liquid'])
+        assert.deepEqual(emitted.map(e => e.id).sort(), ['/layouts/page.js', '/layouts/page.liquid'])
+    })
+
+    it('keeps the .js, so a sidecar cannot be mistaken for its layout', async () => {
+        // The original objection to cataloguing it: stripping the extension
+        // produces a phantom /layouts/page beside the real
+        // /layouts/page.liquid, and `page` is how layouts are resolved.
+        const { emitted } = await scan({ 'page.liquid': '<p>x</p>', 'page.js': 'export const load = () => ({})' })
+        const sidecar = emitted.find(e => e.id === '/layouts/page.js')
+        assert.equal(sidecar.name, 'page.js', 'the name keeps its extension too')
+        assert.equal(sidecar.type, 'sidecar')
+        assert.ok(!emitted.some(e => e.id === '/layouts/page'), 'no phantom')
+    })
+
+    it('carries the source, so it can be read and searched', async () => {
+        const source = 'export const load = () => ({ children: [] })'
+        const { emitted } = await scan({ 'page.liquid': '<p>x</p>', 'page.js': source })
+        assert.equal(emitted.find(e => e.id === '/layouts/page.js').content, source)
+    })
+
+    it('does not put a sidecar in the layouts name map', async () => {
+        // That map answers "which template renders this". A sidecar renders
+        // nothing, and an entry there would shadow a real layout called `page`.
+        await withTempWorking(async (workingFolder) => {
+            const h = createHarness({ options: { workingFolder, outputFolder: path.join(workingFolder, 'out') } })
+            await mkdir(path.join(workingFolder, 'layouts'), { recursive: true })
+            await writeFile(path.join(workingFolder, 'layouts', 'page.liquid'), '<p>x</p>')
+            await writeFile(path.join(workingFolder, 'layouts', 'page.js'), 'export const load = () => ({})')
+            layouts()(h.core)
+            await h.runHook('loaded')
+            await h.runHook('import')
+            const map = h.runtime.state.layouts.layouts
+            assert.ok(map.page, 'the real layout is there')
+            assert.equal(map.page.id, '/layouts/page.liquid')
+            assert.equal(map['page.js'], undefined, 'the sidecar is not')
+        })
     })
 
     it('still treats a JS-AUTHORED layout as a layout, not a sidecar', async () => {

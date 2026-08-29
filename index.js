@@ -123,6 +123,9 @@ export function layouts(userOptions = {}) {
             // what makes their dependents re-render.
             if (_.endsWith(relativePath, '.js') && isSidecarScript(relativePath)) {
                 logger.debug('Layouts sidecar changed (%s) — rescanning layouts', relativePath)
+                // The rescan re-catalogues the sidecar itself and re-emits
+                // whichever layouts its digest moved, so both the entity and
+                // its dependents follow from one call.
                 await rescanLayouts()
                 return
             }
@@ -292,6 +295,23 @@ export function layouts(userOptions = {}) {
             const { layouts } = runtime.state.layouts
             const logger = useLogger()
             const paths = await globby('**/*', { cwd: runtime.options.layoutsFolder, ignore: ['**/*.js'] })
+            // Sidecars are catalogued too — as entities of their own, not as
+            // layouts. They are where a site's data layer lives (`data.children`
+            // on this project is an entire catalog listing), and until now they
+            // were the one source file no tool could read, search or resolve:
+            // an agent could see what a template does but not what feeds it.
+            //
+            // They are scanned in the SAME pass so the checksum gate and the
+            // delete sweep cover them; a separate pass would sweep them away.
+            //
+            // The original objection to giving them entities was the id
+            // stripping — `page.js` becoming a phantom `/layouts/page` beside
+            // the real `/layouts/page.liquid`. Keeping the `.js` removes that,
+            // and they stay out of the layouts NAME map so nothing resolves a
+            // template to one. Rendering is not a risk either: layout matching
+            // skips this collection outright.
+            const sidecarPaths = (await globby('**/*.js', { cwd: runtime.options.layoutsFolder }))
+                .filter(isSidecarScript)
             const inputs = await sidecarInputs()
             const scanned = new Set()
             const stats = { emitted: 0, skipped: 0, deleted: 0 }
@@ -309,10 +329,28 @@ export function layouts(userOptions = {}) {
             // before the loop; the gate hits a Map.get instead of a per-
             // file SQL lookup.
             const priorChecksums = checksumsByCollection(collection)
-            for (let relativePath of paths) {
+            for (let relativePath of [...paths, ...sidecarPaths]) {
                 const uri = path.join(runtime.options.layoutsFolder, relativePath)
                 const id = path.join('/layouts', relativePath)
                 scanned.add(id)
+
+                // A sidecar keeps its extension in both id and name, so it can
+                // never be mistaken for the layout it sits beside, and it is
+                // NOT put in the layouts map — that map answers "which template
+                // renders this", and a sidecar renders nothing.
+                if (sidecarPaths.includes(relativePath)) {
+                    const chksum = await gateChecksum(uri, id, { priorChecksums })
+                    if (chksum === null) { stats.skipped++; continue }
+                    await createEntity({
+                        id, uri, collection,
+                        type: 'sidecar',
+                        name: relativePath,
+                        content: await readLayoutContent(uri),
+                        checksum: chksum,
+                    })
+                    stats.emitted++
+                    continue
+                }
 
                 const name = relativePath.replace(path.extname(relativePath), '')
                 const chksum = await gateChecksum(uri, id, {
