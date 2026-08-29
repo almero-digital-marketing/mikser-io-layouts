@@ -291,3 +291,100 @@ describe('mikser_check_entity: not a page', () => {
         assert.equal(r, null)
     })
 })
+
+// A DECLARED contract outranks one read out of templates.
+//
+// A zod schema says nothing about liquid. It needs no filter table, states
+// required-versus-optional outright rather than inferring it from `{% if %}`
+// guards and `| default:`, and is engine-agnostic by construction. Where one
+// exists, nothing parsed out of a template should be able to call a document
+// broken — that inference has been wrong, and `missing` is the one list that
+// must only ever mean "probably wrong".
+describe('mikser_check_entity: with a declared schema', () => {
+    let checkWithSchema, dir2
+
+    before(async () => {
+        const { z } = await import('zod')
+        dir2 = await mkdtemp(path.join(tmpdir(), 'mikser-check-schema-'))
+        const entities = []
+        for (const [rel, content] of Object.entries(LAYOUTS)) {
+            const uri = path.join(dir2, rel)
+            await mkdir(path.dirname(uri), { recursive: true })
+            await writeFile(uri, content)
+            entities.push({ id: `/layouts/${rel}`, name: rel.replace(/\.liquid$/, ''), uri,
+                            collection: 'layouts', template: 'liquid' })
+        }
+        // Declares a key the layouts do NOT read, and omits one they do.
+        const schema = z.object({
+            title: z.string(),
+            byline: z.string(),                    // declared, no layout reads it
+            hero: z.object({
+                title: z.string(),
+                subtitle: z.string().optional(),   // declared optional
+            }),
+        })
+        const doc = { id: '/documents/schemed.md', name: 'schemed', collection: 'documents',
+                      meta: { schema: 'article', title: 'T', sections: ['hero'],
+                              hero: { title: 'T', tags: [{ label: 'A' }] } } }
+        entities.push(doc)
+
+        const useDatabase = () => ({ handle: { prepare: (sql) => ({
+            all: () => [],
+            get: () => (sql.includes('refClosure')
+                ? { refClosure: JSON.stringify([
+                    { kind: 'layout', target: '/layouts/page.liquid' },
+                    ...PAGE_PARTIALS.map(t => ({ kind: 'partial', target: t })),
+                  ]) }
+                : { metaReads: JSON.stringify(['data.meta.title', 'data.meta.hero.title']) }),
+        }) } })
+        const findEntity = async ({ id }) => entities.find(e => e.id === id) ?? null
+        const findEntities = async (q) => entities.filter(e => q.name == null || e.name === q.name)
+        const runtime = {
+            options: { schemas: { lookup: (n) => (n === 'article' ? schema : undefined), names: () => ['article'] } },
+            renderers: new Map([['liquid', { parseReferences: liquid.parseReferences }]]),
+        }
+        runtime.options.layouts = {
+            inspect: createInspect({ runtime, findEntity, findEntities, useDatabase, collection: 'layouts' }),
+        }
+        const registry = new Map()
+        runtime.options.mcp = { simpleTool: (n, _d, _s, h) => registry.set(n, h) }
+        registerCheckTool({ runtime, findEntity, findEntities, useDatabase,
+                            collection: 'layouts', logger: { debug() {} } })
+        checkWithSchema = async (id) =>
+            JSON.parse((await registry.get('mikser_check_entity')({ id })).content[0].text)
+    })
+
+    after(async () => { if (dir2) await rm(dir2, { recursive: true, force: true }) })
+
+    it('takes `missing` from the schema and says so', async () => {
+        const r = await checkWithSchema('/documents/schemed.md')
+        assert.equal(r.missingFrom, 'schema')
+        assert.ok(r.missing.includes('byline'), `missing: ${r.missing.join(', ')}`)
+    })
+
+    it('honours zod optionality instead of inferring it from the template', async () => {
+        // `.optional()` states it. No guard analysis, no filter table.
+        const r = await checkWithSchema('/documents/schemed.md')
+        assert.ok(!r.missing.includes('hero.subtitle'))
+        assert.ok(r.missingOptional.includes('hero.subtitle'),
+            `missingOptional: ${r.missingOptional.join(', ')}`)
+    })
+
+    it('reports drift in both directions', async () => {
+        const r = await checkWithSchema('/documents/schemed.md')
+        assert.equal(r.drift.schema, 'article')
+        // The layouts read hero.tags[].label; nothing declares it.
+        assert.ok(r.drift.readButNotDeclared.some(k => k.startsWith('hero.tags')),
+            `readButNotDeclared: ${r.drift.readButNotDeclared.join(', ')}`)
+        // byline is declared and no layout reads it.
+        assert.ok(r.drift.declaredButNotRead.includes('byline'),
+            `declaredButNotRead: ${r.drift.declaredButNotRead.join(', ')}`)
+    })
+
+    it('labels an inferred contract as inferred when there is no schema', async () => {
+        const r = await check('/documents/good.md')
+        assert.equal(r.missingFrom, 'inferred')
+        assert.ok(r.notes.some(n => /has been wrong/.test(n)),
+            'the weaker source has to say that it is weaker')
+    })
+})
