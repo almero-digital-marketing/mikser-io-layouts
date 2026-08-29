@@ -102,7 +102,7 @@ export function layouts(userOptions = {}) {
         // in the plugins array for this to fire; that constraint is
         // documented in mikser-io's CLAUDE.md.
         onLoaded(async () => {
-            registerMcpTools({ runtime, useLogger })
+            registerMcpTools({ runtime, useLogger, findEntity, findEntities, useDatabase, collection })
         })
 
         onSync(collection, async ({ action, context }) => {

@@ -1,6 +1,6 @@
 {
   "name": "mikser-io-layouts",
-  "version": "2.7.0",
+  "version": "2.8.0",
   "description": "SSG-flavor task-production policy for mikser-io. Multi-match layout assignment, per-layout destinations, postprocess chain attachment, layout inspection.",
   "main": "index.js",
   "type": "module",
