@@ -53,7 +53,7 @@ const DOCS = {
     '/documents/ghost.md': { title: 'T', sections: ['hero', 'nosuchsection'],
                              hero: { title: 'T', subtitle: 'S', tags: [{ label: 'A' }] } },
     // Never renders; a page queries it. Data, not an unbuilt page.
-    '/documents/nav.yml': { href: '/system/nav', items: [{ label: 'Home' }] },
+    '/documents/nav.yml': { href: '/system/nav', items: [{ label: 'Home', href: '/' }], menuLabel: 'Menu' },
     // Never renders and nothing reads it.
     '/documents/orphan.yml': { href: '/system/orphan', whatever: 1 },
     // Engine-owned keys must never be reported as unused.
@@ -91,9 +91,16 @@ before(async () => {
     const observed = ['data.meta.title', 'data.meta.hero', 'data.meta.hero.title',
                       'data.meta.hero.subtitle', 'data.meta.hero.tags', 'data.meta.hero.tags[]',
                       'data.meta.hero.tags[].label']
+    // What renders took OFF other entities. good.md read two fields of nav.yml
+    // and never touched menuLabel — which is the whole point: the contract for a
+    // document that never renders is what its consumers actually read.
+    const CONSUMED = [['/documents/nav.yml', ['items', 'items[]', 'items[].label', 'items[].href']]]
     const useDatabase = () => ({
         handle: {
             prepare: (sql) => ({
+                all: () => (sql.includes('consumedReads')
+                    ? [{ id: '/documents/good.md', consumedReads: JSON.stringify(CONSUMED) }]
+                    : []),
                 get: (id) => (RENDERED.has(id)
                     ? {
                         refClosure: JSON.stringify([
@@ -218,13 +225,31 @@ describe('mikser_check_entity: a page', () => {
 describe('mikser_check_entity: not a page', () => {
     it('treats a consumed document as DATA, not as an unbuilt page', async () => {
         // The old message told the reader to "build once" — sending them after
-        // a problem that does not exist. navigation.yml will never render.
+        // a problem that does not exist. A data document will never render.
         const r = await check('/documents/nav.yml')
         assert.equal(r.kind, 'data')
-        assert.deepEqual(r.consumedBy, ['/documents/extra.md', '/documents/good.md'])
+        assert.deepEqual(r.consumedBy, ['/documents/good.md'])
         assert.ok(!JSON.stringify(r.notes).includes('build once'))
-        assert.ok(r.notes.some(n => /surface as a hole in the pages/.test(n)),
+        assert.ok(r.notes.some(n => /hole in the pages listed above/.test(n)),
             'it has to say where a mistake would actually show up')
+    })
+
+    it('derives a real contract from what its consumers READ', async () => {
+        // Not a refusal and not just a consumer list: the keys renders actually
+        // took off this entity. That is its contract, asked from the other side.
+        const r = await check('/documents/nav.yml')
+        assert.equal(r.checked, true)
+        assert.equal(r.reliable, true)
+        assert.ok(r.consumedKeys.includes('items[].label'), `consumedKeys: ${r.consumedKeys.join(', ')}`)
+        assert.deepEqual(r.missing, [], 'this document provides everything its consumers read')
+    })
+
+    it('holds a data document to the same standard as a page', async () => {
+        // menuLabel is provided and no render reads it. Weak evidence, exactly
+        // as on a page — an API client may well be the consumer.
+        const r = await check('/documents/nav.yml')
+        assert.ok(r.unused.includes('menuLabel'), `unused: ${r.unused.join(', ')}`)
+        assert.ok(r.notes.some(n => /API client/.test(n)))
     })
 
     it('says plainly when no contract can be derived', async () => {
