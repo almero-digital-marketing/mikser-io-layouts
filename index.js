@@ -245,12 +245,13 @@ export function layouts(userOptions = {}) {
         //
         // Two components:
         //   own     — the layout's own sidecar, `<name>.js`
-        //   shared  — every OTHER .js under the folder, as one digest
+        //   shared  — ALL sidecar scripts under the folder, as one digest
+        //             (its own included; `own` just names it separately)
         //
         // `shared` is coarse on purpose: a sidecar's own imports
         // (layouts/lib/context.js and friends) would otherwise need a module
-        // graph walk. Treating any shared .js change as invalidating every
-        // layout is what the folder can afford — tens of files, not
+        // graph walk. One global digest means any sidecar change invalidates
+        // EVERY layout, which is what the folder can afford — tens of files, not
         // thousands — and it is predictable, which a partial graph walk
         // would not be.
         // NOT every .js under the folder is a sidecar. `post.hbs.js` is a
