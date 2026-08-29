@@ -388,3 +388,86 @@ describe('mikser_check_entity: with a declared schema', () => {
             'the weaker source has to say that it is weaker')
     })
 })
+
+// Is this record complete AS A RECORD?
+//
+// A layout contract cannot answer that. A catalog entry missing a field its
+// siblings all carry renders perfectly, reads nothing that is absent, and passes
+// every other check here — and a derived schema will not catch it either, since
+// a key one sibling lacks becomes `.optional()`. Comparing a record with its own
+// kind is the only thing that sees it.
+//
+// Weak evidence on purpose: records differ for good reasons.
+describe('mikser_check_entity: peer comparison', () => {
+    let peerCheck
+
+    const entry = (n, extra = {}) => ({
+        id: `/documents/cat-${n}.md`, name: `cat-${n}`, collection: 'documents',
+        meta: { schema: 'catalog', title: `T${n}`, href: `/c/${n}`, summary: 'S', ...extra },
+    })
+
+    before(async () => {
+        // Nine complete siblings, one missing `summary`, and one carrying a key
+        // only it has.
+        const entities = [
+            ...Array.from({ length: 9 }, (_, i) => entry(i)),
+            (() => { const e = entry('gap'); delete e.meta.summary; return e })(),
+            entry('extra', { oddball: true }),
+        ]
+        const findEntity = async ({ id }) => entities.find(e => e.id === id) ?? null
+        const findEntities = async (q) => entities.filter(e =>
+            Object.entries(q ?? {}).every(([k, v]) => k.split('.').reduce((o, x) => o?.[x], e) === v))
+        const runtime = { options: {}, renderers: new Map() }
+        runtime.options.layouts = { inspect: async () => ({ references: {} }) }
+        const registry = new Map()
+        runtime.options.mcp = { simpleTool: (n, _d, _s, h) => registry.set(n, h) }
+        registerCheckTool({
+            runtime, findEntity, findEntities,
+            // No snapshots: these never render, so they are data documents.
+            useDatabase: () => ({ handle: { prepare: () => ({ all: () => [], get: () => undefined }) } }),
+            collection: 'layouts', logger: { debug() {} },
+        })
+        peerCheck = async (id) =>
+            JSON.parse((await registry.get('mikser_check_entity')({ id })).content[0].text)
+    })
+
+    it('reports a key most siblings carry and this record lacks', async () => {
+        const r = await peerCheck('/documents/cat-gap.md')
+        const gap = r.peerGaps?.find(g => g.key === 'summary')
+        assert.ok(gap, `no peer gap found: ${JSON.stringify(r.peerGaps)}`)
+        assert.equal(gap.siblings, 10, 'ten of the ten siblings have it')
+        assert.equal(gap.of, 10)
+    })
+
+    it('names the group, so the count means something', async () => {
+        const r = await peerCheck('/documents/cat-gap.md')
+        assert.equal(r.peerGroup.type, 'catalog')
+        assert.equal(r.peerGroup.peers, 10)
+    })
+
+    it('says nothing about a complete record', async () => {
+        // No false positives, or nobody reads the list.
+        const r = await peerCheck('/documents/cat-0.md')
+        assert.equal(r.peerGaps, undefined)
+    })
+
+    it('does not report a key only ONE sibling has', async () => {
+        // `oddball` exists on exactly one record. One record is not a pattern.
+        const r = await peerCheck('/documents/cat-0.md')
+        assert.ok(!(r.peerGaps ?? []).some(g => g.key === 'oddball'))
+    })
+
+    it('never fails the check — it is a prompt, not a defect', async () => {
+        const r = await peerCheck('/documents/cat-gap.md')
+        assert.notEqual(r.kind, undefined)
+        assert.ok(r.notes.some(n => /Weak evidence, never a failure|never a failure/.test(n)),
+            'the weakness has to travel with the finding')
+    })
+
+    it('excludes engine-owned keys from the comparison', async () => {
+        const r = await peerCheck('/documents/cat-gap.md')
+        for (const k of ['schema', 'href', 'lang']) {
+            assert.ok(!(r.peerGaps ?? []).some(g => g.key === k), `${k} leaked into peerGaps`)
+        }
+    })
+})
