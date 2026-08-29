@@ -373,6 +373,27 @@ describe('mikser_check_entity: with a declared schema', () => {
             `missingOptional: ${r.missingOptional.join(', ')}`)
     })
 
+    it('answers declaredButNotRead against ANY layout, not just this page', async () => {
+        // The mirror of the scoping fix. `missing` asks what THIS page needs,
+        // so it is scoped; "is this key read anywhere" is the opposite question
+        // and must not be. Scoped, a shorter edition of a page reported every
+        // key of every section it does not use as dead — 118 of them on a page
+        // whose only difference was using fewer sections than its sibling.
+        const r = await checkWithSchema('/documents/schemed.md')
+        assert.ok(!r.drift.declaredButNotRead.some(k => k.startsWith('hero.')),
+            `hero keys are read by a layout, just not this render: ${r.drift.declaredButNotRead.join(', ')}`)
+    })
+
+    it('does not list an optional key this page could not use anyway', async () => {
+        // Same noise by another route: a key outside what this page renders is
+        // not an omission, it is not applicable.
+        const r = await checkWithSchema('/documents/schemed.md')
+        for (const k of r.missingOptional) {
+            assert.ok(!/^(specs|series|results)\./.test(k),
+                `${k} belongs to a section this page does not render`)
+        }
+    })
+
     it('reports drift in both directions', async () => {
         const r = await checkWithSchema('/documents/schemed.md')
         assert.equal(r.drift.schema, 'article')
