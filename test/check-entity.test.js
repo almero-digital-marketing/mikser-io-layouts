@@ -53,7 +53,10 @@ const DOCS = {
     '/documents/ghost.md': { title: 'T', sections: ['hero', 'nosuchsection'],
                              hero: { title: 'T', subtitle: 'S', tags: [{ label: 'A' }] } },
     // Never renders; a page queries it. Data, not an unbuilt page.
-    '/documents/nav.yml': { href: '/system/nav', items: [{ label: 'Home', href: '/' }], menuLabel: 'Menu' },
+    '/documents/nav.yml': { href: '/system/nav', items: [{ label: 'Home', href: '/' }], menuLabel: 'Menu',
+                            // Read as a whole and then handed to a template, so
+                            // only the top-level access is ever recorded.
+                            enquiry: { title: 'Ask', fields: [{ label: 'Message', name: 'message' }] } },
     // Never renders and nothing reads it.
     '/documents/orphan.yml': { href: '/system/orphan', whatever: 1 },
     // Engine-owned keys must never be reported as unused.
@@ -94,7 +97,7 @@ before(async () => {
     // What renders took OFF other entities. good.md read two fields of nav.yml
     // and never touched menuLabel — which is the whole point: the contract for a
     // document that never renders is what its consumers actually read.
-    const CONSUMED = [['/documents/nav.yml', ['items', 'items[]', 'items[].label', 'items[].href']]]
+    const CONSUMED = [['/documents/nav.yml', ['items', 'items[]', 'items[].label', 'items[].href', 'enquiry']]]
     const useDatabase = () => ({
         handle: {
             prepare: (sql) => ({
@@ -244,12 +247,35 @@ describe('mikser_check_entity: not a page', () => {
         assert.deepEqual(r.missing, [], 'this document provides everything its consumers read')
     })
 
+    it('does not call a key unused when an ancestor of it WAS read', async () => {
+        // The signature of a read this engine cannot follow: `enquiry` was read
+        // and handed to a template, and provenance does not survive that hop, so
+        // every field under it looks untouched while being on every page.
+        // Reporting nine false findings is worse than one honest line — someone
+        // acting on the list deletes a working form.
+        const r = await check('/documents/nav.yml')
+        for (const key of ['enquiry.title', 'enquiry.fields[].label', 'enquiry.fields[].name']) {
+            assert.ok(!r.unused.includes(key), `${key} was reported unused: ${r.unused.join(', ')}`)
+        }
+        const group = r.untraceable.find(g => g.under === 'enquiry')
+        assert.ok(group, `expected them collapsed under enquiry, got ${JSON.stringify(r.untraceable)}`)
+        assert.ok(group.keys.includes('enquiry.fields[].label'))
+        assert.ok(r.notes.some(n => /Treat them as consumed/.test(n)))
+    })
+
+    it('still reports a key nothing read at all', async () => {
+        // The safeguard must not swallow the real signal: menuLabel has no
+        // ancestor that was read, so it stays where it belongs.
+        const r = await check('/documents/nav.yml')
+        assert.ok(r.unused.includes('menuLabel'), `unused: ${r.unused.join(', ')}`)
+        assert.ok(r.notes.some(n => /API client/.test(n)), 'its caveat has to travel with it')
+    })
+
     it('holds a data document to the same standard as a page', async () => {
         // menuLabel is provided and no render reads it. Weak evidence, exactly
         // as on a page — an API client may well be the consumer.
         const r = await check('/documents/nav.yml')
-        assert.ok(r.unused.includes('menuLabel'), `unused: ${r.unused.join(', ')}`)
-        assert.ok(r.notes.some(n => /API client/.test(n)))
+        assert.ok(r.consumedKeys.includes('items[].label'))
     })
 
     it('says plainly when no contract can be derived', async () => {
