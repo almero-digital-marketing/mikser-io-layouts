@@ -176,7 +176,28 @@ See the [mikser-io rendering docs](https://github.com/almero-digital-marketing/m
 
 ## `inspect()` primitive
 
-`runtime.options.layouts.inspect(layoutId, { samples })` runs a layout against `samples` real entities and returns the resolved template source, render context, parsed refs, and any errors. Used by the `mikser-io-mcp` plugin's `mikser_layouts_inspect` MCP tool but available to any plugin that wants to surface layout introspection.
+`runtime.options.layouts.inspect(layoutId, { samples, partials })` returns a layout's template source, sample entities, and three views of what it depends on:
+
+- **`references.contract`** — the whole layout tree walked, with partial arguments and renamings resolved, so `meta` lists document keys in the form a document writes them. Pass `partials` (the ids a render actually used, from the manifest) to scope it to one page: a layout that dispatches sections through a registry otherwise resolves statically to *every* section in the project.
+- **`references.runtime`** — what recent renders actually touched, including `metaReads`, which sees a layout sidecar that no parser can.
+- **`references.static`** — the single-file parse, in that file's own vocabulary.
+
+`contract.complete` is false when a branch could not be read, and `incomplete` names each with a reason. An incomplete contract is still useful, but absence is not proof.
+
+## Checking a document — `mikser_check_entity`
+
+Answers "does this document have what its layout needs", before the mistake ships. A mistyped key does not fail a build: the section it named simply does not render.
+
+It classifies the entity first, because not every document is a page — `page`, `data` (never renders, but other entities query it; reports who, and what they read off it) or `unreferenced` (nothing in the catalog reads it, which is not an error — the catalog is readable over the API).
+
+Read `missing` first, but check **`missingFrom`**:
+
+- `schema` — a [zod schema](https://www.npmjs.com/package/mikser-io-schemas) declares the key required. Authoritative, and it needed no template parsing.
+- `inferred` — read out of the templates. Strong evidence, not proof: it models one engine's semantics and a guard it cannot see makes a fine document look broken.
+
+With a schema you also get `drift`: `readButNotDeclared` (layouts consume a key nothing declares — a schema gap, or a template typo) and `declaredButNotRead` (declared, unread — dead, or served over the API).
+
+Everything else means "you may want to look", never "this is broken": `missingOptional` is guarded and safe to omit, `unused` may be consumed by another layout or an API client, `untraceable` means an ancestor was read but its members could not be followed, and `unresolvedSections` names a section that matched no template.
 
 ## Entity properties
 
