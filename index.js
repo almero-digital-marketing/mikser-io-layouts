@@ -381,6 +381,35 @@ export function layouts(userOptions = {}) {
                     },
                 }
                 Object.assign(layout, await getFormatInfo(relativePath))
+
+                // Two files can resolve to ONE layout name, and this map is
+                // keyed by name — so the second one silently replaced the
+                // first and which one won depended on scan order.
+                //
+                // getFormatInfo strips the whole compound extension:
+                // sitemap.xml.liquid, sitemap.liquid and sitemap.xml.js are
+                // all named `sitemap`. A document asking for `layout: sitemap`
+                // then got whichever landed last, and if that was a `js`
+                // template it rendered nothing — no error, no warning, the
+                // build green and the page absent. Reported from a real
+                // migration, where the same shape worked for one layout and
+                // not another and no rule could be found, because the rule was
+                // directory order.
+                //
+                // Not resolved here, because picking a winner would be
+                // guessing at intent. Said out loud instead, naming both
+                // files, which is the thing that was missing.
+                const clash = layouts[layout.name]
+                if (clash && clash.id !== layout.id) {
+                    logger.warn(
+                        { code: 'layout-name-collision', name: layout.name, files: [clash.uri, layout.uri] },
+                        'Layouts %j is claimed by two files — %s and %s. Both reduce to the same layout name, '
+                        + 'so one replaces the other and which one wins is directory order. A document asking '
+                        + 'for this layout may render with the wrong template, or with a `js` template that '
+                        + 'emits nothing at all. Rename one of them.',
+                        layout.name, clash.uri, layout.uri)
+                }
+
                 layouts[layout.name] = layout
                 await createEntity(layout)
                 stats.emitted++
