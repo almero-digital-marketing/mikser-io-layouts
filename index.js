@@ -311,8 +311,43 @@ export function layouts(userOptions = {}) {
             // and they stay out of the layouts NAME map so nothing resolves a
             // template to one. Rendering is not a risk either: layout matching
             // skips this collection outright.
-            const sidecarPaths = (await globby('**/*.js', { cwd: runtime.options.layoutsFolder }))
-                .filter(isSidecarScript)
+            const allScripts = await globby('**/*.js', { cwd: runtime.options.layoutsFolder })
+            const sidecarPaths = allScripts.filter(isSidecarScript)
+
+            // A `.js` that nothing will ever read.
+            //
+            // A sidecar is named after the LAYOUT, and a layout's name drops
+            // BOTH extensions: `robots.txt.liquid` is the layout `robots`, so
+            // its sidecar is `robots.js`. Write `robots.txt.js` and it is
+            // claimed by nothing — isSidecarScript rejects it because
+            // stripping `.js` leaves `.txt`, and the layout glob ignores every
+            // `.js` outright. The file is simply invisible: it does not fail,
+            // it never runs, and the layout renders with empty `data`.
+            //
+            // Downstream that shipped `Sitemap: /sitemap.xml` as a relative
+            // reference in a robots.txt — which in a robots.txt means nothing
+            // — on a green build.
+            //
+            // Only when a layout sits beside it under the same stem, which is
+            // what makes this a misnaming rather than a stray file. A dotted
+            // module a sidecar imports (`lib/data.json.js`) is claimed by
+            // nothing either, and is nobody's mistake; flagging it would be
+            // the noise that gets this line filtered out.
+            for (const script of allScripts) {
+                if (isSidecarScript(script)) continue
+                const stem = script.replace(/\.js$/, '')
+                const layout = paths.find(candidate =>
+                    candidate === stem || candidate.startsWith(`${stem}.`))
+                if (!layout) continue
+                const name = path.basename(stem, path.extname(stem))
+                logger.warn({ code: 'layout-sidecar-misnamed', script, layout },
+                    'layouts/%s is not loaded as a sidecar and nothing else reads it. A sidecar is '
+                    + 'named after the LAYOUT, and %s is the layout `%s` — both extensions are '
+                    + 'dropped — so its sidecar has to be %s.js. The layout renders with empty data '
+                    + 'until it is renamed.',
+                    script, layout, name, path.join(path.dirname(stem) === '.' ? '' : path.dirname(stem), name))
+            }
+
             const inputs = await sidecarInputs()
             const scanned = new Set()
             const stats = { emitted: 0, skipped: 0, deleted: 0 }
