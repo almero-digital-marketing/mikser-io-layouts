@@ -23,6 +23,7 @@ import {
     useDatabase,
     writeOutput, reportUnchanged,
     provideService,
+    cliOption,
 } from 'mikser-io'
 
 import { createInspect } from './lib/inspect.js'
@@ -95,6 +96,14 @@ export function layouts(userOptions = {}) {
         //
         // Provided at factory-eval time — before any hook runs — so a
         // consumer's onLoaded sees it whatever the plugin order.
+        // The flag this package could not have until runtime.options.layouts
+        // stopped holding an API object: commander derives the property from
+        // the long flag, so `--layouts` would have landed a folder string on
+        // top of inspect(), after the load phase, breaking a consumer three
+        // plugins away.
+        cliOption('--layouts <folder>',
+            'folder holding the layout templates, relative to the working folder (default: layouts)')
+
         provideService('layouts', {
             inspect: createInspect({ runtime, findEntity, findEntities, useDatabase, collection }),
         }, { plugin: 'mikser-io-layouts' })
@@ -200,13 +209,18 @@ export function layouts(userOptions = {}) {
                 layouts: {},
             }
 
-            // Folder name resolved here (config override or default to the
-            // collection name) and used immediately to build the absolute
-            // path. No need to keep the bare folder-name string on
-            // runtime.options — runtime.options.layoutsFolder is the only
-            // useful form downstream.
-            const layoutsFolderName = options.layoutsFolder || collection
-            runtime.options.layoutsFolder = path.join(runtime.options.workingFolder, layoutsFolderName)
+            // --layouts wins, then the config, then the collection name.
+            //
+            // Read HERE rather than at construction: the option table is not
+            // parsed until every plugin has been constructed and had its
+            // chance to declare, so a value read in the factory is always
+            // undefined. An absolute value is taken as given; anything else
+            // is relative to the working folder, like every other folder flag.
+            const layoutsFolderName =
+                runtime.options.layouts ?? options.layoutsFolder ?? collection
+            runtime.options.layoutsFolder = path.isAbsolute(layoutsFolderName)
+                ? layoutsFolderName
+                : path.join(runtime.options.workingFolder, layoutsFolderName)
             runtime.options.layoutsStateFolder = path.join(runtime.options.outputFolder, 'state')
 
             logger.debug('Layouts folder: %s', runtime.options.layoutsFolder)

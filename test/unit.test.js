@@ -36,6 +36,38 @@ describe('layouts plugin', () => {
         assert.equal(typeof useService('layouts')?.inspect, 'function')
     })
 
+    it('puts the layouts folder where --layouts says', async () => {
+        // The flag could not exist while runtime.options.layouts held the
+        // inspect API: commander names an option after its long flag, so this
+        // would have overwritten that object after the load phase and broken
+        // a consumer somewhere else entirely.
+        await withTempWorking(async (workingFolder) => {
+            const h = createHarness({ options: {
+                workingFolder, outputFolder: path.join(workingFolder, 'out'), layouts: 'tmpl' } })
+            layouts()(h.core)
+            await h.runHook('loaded')
+            assert.equal(h.runtime.options.layoutsFolder, path.join(workingFolder, 'tmpl'))
+        })
+    })
+
+    it('lets --layouts win over the config, and takes an absolute path as given', async () => {
+        await withTempWorking(async (workingFolder) => {
+            const h = createHarness({ options: {
+                workingFolder, outputFolder: path.join(workingFolder, 'out'), layouts: 'from-cli' } })
+            layouts({ layoutsFolder: 'from-config' })(h.core)
+            await h.runHook('loaded')
+            assert.equal(h.runtime.options.layoutsFolder, path.join(workingFolder, 'from-cli'))
+        })
+        await withTempWorking(async (workingFolder) => {
+            const absolute = path.join(workingFolder, 'elsewhere')
+            const h = createHarness({ options: {
+                workingFolder, outputFolder: path.join(workingFolder, 'out'), layouts: absolute } })
+            layouts()(h.core)
+            await h.runHook('loaded')
+            assert.equal(h.runtime.options.layoutsFolder, absolute)
+        })
+    })
+
     it('initializes runtime.state.layouts on onLoaded with empty maps', async () => {
         await withTempWorking(async (workingFolder) => {
             const h = createHarness({ options: { workingFolder, outputFolder: path.join(workingFolder, 'out') } })
