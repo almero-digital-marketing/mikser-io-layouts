@@ -16,6 +16,7 @@ import path from 'node:path'
 import { createInspect } from '../lib/inspect.js'
 import { registerCheckTool } from '../lib/mcp.js'
 import * as liquid from 'mikser-io-render-liquid'
+import { provideService, resetServices, invokeTool } from 'mikser-io'
 
 // Shaped like a real project: a page shell with chrome, and sections dispatched
 // through a registry. The registry is the reason scoping matters — statically it
@@ -129,15 +130,22 @@ before(async () => {
                 : new Set()),
         },
     }
-    runtime.options.layouts = {
-        inspect: createInspect({ runtime, findEntity, findEntities, useDatabase, collection: 'layouts' }),
+    // Each fixture activates itself immediately before it is used. The tool
+    // registry is one global list now, so a later describe's registration
+    // replaces an earlier one — and one test here deliberately reaches back
+    // to the no-schema fixture from inside the schema describe.
+    const activate = () => {
+        resetServices()
+        provideService('layouts', {
+            inspect: createInspect({ runtime, findEntity, findEntities, useDatabase, collection: 'layouts' }),
+        })
+        registerCheckTool({ runtime, findEntity, findEntities, useDatabase,
+                            collection: 'layouts', logger: { debug() {} } })
     }
-    const registry = new Map()
-    runtime.options.mcp = { simpleTool: (name, _d, _s, handler) => registry.set(name, handler) }
-    registerCheckTool({ runtime, findEntity, findEntities, useDatabase,
-                        collection: 'layouts', logger: { debug() {} } })
-
-    check = async (id) => JSON.parse((await registry.get('mikser_check_entity')({ id })).content[0].text)
+    check = async (id) => {
+        activate()
+        return JSON.parse((await invokeTool('check_entity', { id })).content[0].text)
+    }
 })
 
 after(async () => { if (dir) await rm(dir, { recursive: true, force: true }) })
@@ -346,15 +354,19 @@ describe('mikser_check_entity: with a declared schema', () => {
             options: { schemas: { lookup: (n) => (n === 'article' ? schema : undefined), names: () => ['article'] } },
             renderers: new Map([['liquid', { parseReferences: liquid.parseReferences }]]),
         }
-        runtime.options.layouts = {
-            inspect: createInspect({ runtime, findEntity, findEntities, useDatabase, collection: 'layouts' }),
+        const activate = () => {
+            resetServices()
+            provideService('layouts', {
+                inspect: createInspect({ runtime, findEntity, findEntities, useDatabase, collection: 'layouts' }),
+            })
+            provideService('schemas', runtime.options.schemas)
+            registerCheckTool({ runtime, findEntity, findEntities, useDatabase,
+                                collection: 'layouts', logger: { debug() {} } })
         }
-        const registry = new Map()
-        runtime.options.mcp = { simpleTool: (n, _d, _s, h) => registry.set(n, h) }
-        registerCheckTool({ runtime, findEntity, findEntities, useDatabase,
-                            collection: 'layouts', logger: { debug() {} } })
-        checkWithSchema = async (id) =>
-            JSON.parse((await registry.get('mikser_check_entity')({ id })).content[0].text)
+        checkWithSchema = async (id) => {
+            activate()
+            return JSON.parse((await invokeTool('check_entity', { id })).content[0].text)
+        }
     })
 
     after(async () => { if (dir2) await rm(dir2, { recursive: true, force: true }) })
@@ -442,17 +454,20 @@ describe('mikser_check_entity: peer comparison', () => {
         const findEntities = async (q) => entities.filter(e =>
             Object.entries(q ?? {}).every(([k, v]) => k.split('.').reduce((o, x) => o?.[x], e) === v))
         const runtime = { options: {}, renderers: new Map() }
-        runtime.options.layouts = { inspect: async () => ({ references: {} }) }
-        const registry = new Map()
-        runtime.options.mcp = { simpleTool: (n, _d, _s, h) => registry.set(n, h) }
-        registerCheckTool({
-            runtime, findEntity, findEntities,
-            // No snapshots: these never render, so they are data documents.
-            useDatabase: () => ({ handle: { prepare: () => ({ all: () => [], get: () => undefined }) } }),
-            collection: 'layouts', logger: { debug() {} },
-        })
-        peerCheck = async (id) =>
-            JSON.parse((await registry.get('mikser_check_entity')({ id })).content[0].text)
+        const activate = () => {
+            resetServices()
+            provideService('layouts', { inspect: async () => ({ references: {} }) })
+            registerCheckTool({
+                runtime, findEntity, findEntities,
+                // No snapshots: these never render, so they are data documents.
+                useDatabase: () => ({ handle: { prepare: () => ({ all: () => [], get: () => undefined }) } }),
+                collection: 'layouts', logger: { debug() {} },
+            })
+        }
+        peerCheck = async (id) => {
+            activate()
+            return JSON.parse((await invokeTool('check_entity', { id })).content[0].text)
+        }
     })
 
     it('reports a key most siblings carry and this record lacks', async () => {

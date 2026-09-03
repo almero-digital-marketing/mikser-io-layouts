@@ -9,6 +9,7 @@ import _ from 'lodash'
 import {
     runtime as realRuntime,
     matchEntity, normalize, changeExtension, getFormatInfo, checksum, AbortError,
+    resetServices,
 } from 'mikser-io'
 
 const OPERATION = {
@@ -33,6 +34,10 @@ export function createHarness({
     entities = [],
     journal = [],
 } = {}) {
+    // A fresh harness is a fresh world, and the service registry is module
+    // state that would otherwise carry the previous test's provider into this
+    // one — where providing it again is (correctly) an error.
+    resetServices()
     const hookNames = [
         'load', 'loaded', 'import', 'imported',
         'process', 'processed', 'persist', 'persisted',

@@ -22,6 +22,7 @@ import {
     checksum as fileChecksum, checksumOf,
     useDatabase,
     writeOutput, reportUnchanged,
+    provideService,
 } from 'mikser-io'
 
 import { createInspect } from './lib/inspect.js'
@@ -87,20 +88,20 @@ export function layouts(userOptions = {}) {
         // The old `runtime.state.layouts.sitemap` in-memory map + `uriIndex`
         // are gone: every entity's "sitemap presence" IS its catalog row.
 
-        // Expose the layouts inspection surface for other plugins (the
-        // mikser-io-mcp plugin wraps inspect() as the mikser_layouts_inspect
-        // tool). Done at factory-eval time — before any onLoaded fires — so
-        // a later plugin's onLoaded can see it. Matches the preview plugin
-        // pattern (`runtime.options.preview = { store, get, stats, config }`).
-        runtime.options.layouts = {
+        // Offer the inspection surface as a service. A consumer asks core
+        // for 'layouts' and never names this package; before, it read
+        // runtime.options.layouts directly, which coupled the two through an
+        // object neither owns and cost the `--layouts` flag its name.
+        //
+        // Provided at factory-eval time — before any hook runs — so a
+        // consumer's onLoaded sees it whatever the plugin order.
+        provideService('layouts', {
             inspect: createInspect({ runtime, findEntity, findEntities, useDatabase, collection }),
-        }
+        }, { plugin: 'mikser-io-layouts' })
 
-        // MCP tool registration. Gated on runtime.options.mcp — when the
-        // mcp plugin isn't loaded, this is a no-op (vector / schemas /
-        // preview use the same pattern). The mcp plugin must be FIRST
-        // in the plugins array for this to fire; that constraint is
-        // documented in mikser-io's CLAUDE.md.
+        // Tool registration. Registers against core's tool registry, which
+        // exists whether or not the mcp plugin is installed — so there is no
+        // gate to write and no ordering rule to obey.
         onLoaded(async () => {
             registerMcpTools({ runtime, useLogger, findEntity, findEntities, useDatabase, collection })
         })

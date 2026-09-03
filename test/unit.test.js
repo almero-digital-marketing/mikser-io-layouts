@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import { layouts } from '../index.js'
-import { frontMatter } from 'mikser-io'
+import { frontMatter, useService } from 'mikser-io'
 import { createHarness } from './_harness.js'
 
 async function withTempWorking(fn) {
@@ -30,10 +30,10 @@ describe('layouts plugin', () => {
         assert.equal(h.hooks.beforeRender.length, 1)
         assert.equal(h.hooks.complete.length, 1)
         assert.ok(h.sync.has('layouts'))
-        // The inspect primitive is exposed at factory-eval — before any
-        // onLoaded fires — so plugins listed after layouts in the
-        // plugins array can see it during their own onLoaded.
-        assert.equal(typeof h.runtime.options.layouts?.inspect, 'function')
+        // The inspect primitive is offered at factory-eval — before any
+        // onLoaded fires — so a consumer sees it during its own onLoaded
+        // whatever the plugin order.
+        assert.equal(typeof useService('layouts')?.inspect, 'function')
     })
 
     it('initializes runtime.state.layouts on onLoaded with empty maps', async () => {
