@@ -27,7 +27,8 @@
     "lodash": "^4.17.0"
   },
   "devDependencies": {
-    "mikser-io": "file:../mikser-io",
+    "mikser-io": "^10.0.0",
+    "mikser-io-render-liquid": "^6.0.0",
     "zod": "^4.0.0"
   }
 }
