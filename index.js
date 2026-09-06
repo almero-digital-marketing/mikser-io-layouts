@@ -19,7 +19,7 @@ import _ from 'lodash'
 import {
     gateChecksum, sweepDeleted, scanSummary,
     checksumsByCollection,
-    checksum as fileChecksum, checksumOf,
+    checksum as fileChecksum, checksumOf, registerSourceChecksum,
     useDatabase,
     writeOutput, reportUnchanged,
     provideService,
@@ -283,13 +283,27 @@ export function layouts(userOptions = {}) {
         // non-entity, which is why it is a rule and not a guess.
         const isSidecarScript = (rel) => path.extname(rel.replace(/\.js$/, '')) === ''
 
+        // The folder, resolved the same way the onLoaded below resolves it.
+        //
+        // That onLoaded is where `runtime.options.layoutsFolder` gets set, and
+        // a report-only command — mikser_explain, --audit-output — runs in an
+        // onLoaded too. Which of the two runs first is plugin order, so a
+        // recompute that read the option directly worked or threw depending on
+        // it. Derived here instead, so the answer does not depend on the
+        // question's timing.
+        function layoutsFolderNow() {
+            if (runtime.options.layoutsFolder) return runtime.options.layoutsFolder
+            const name = runtime.options.layouts ?? options.layoutsFolder ?? collection
+            return path.isAbsolute(name) ? name : path.join(runtime.options.workingFolder, name)
+        }
+
         async function sidecarInputs() {
-            const scriptPaths = (await globby('**/*.js', { cwd: runtime.options.layoutsFolder }))
+            const scriptPaths = (await globby('**/*.js', { cwd: layoutsFolderNow() }))
                 .filter(isSidecarScript)
             const own = new Map()
             const shared = []
             for (const rel of scriptPaths.sort()) {
-                const sum = await fileChecksum(path.join(runtime.options.layoutsFolder, rel))
+                const sum = await fileChecksum(path.join(layoutsFolderNow(), rel))
                 own.set(rel.replace(/\.js$/, ''), sum)
                 shared.push(`${rel}:${sum}`)
             }
@@ -304,6 +318,19 @@ export function layouts(userOptions = {}) {
             const sidecar = inputs.own.get(name) ?? ''
             return Buffer.from(`${template}:${sidecar}:${inputs.sharedDigest}`, 'utf8')
         }
+
+        // Tell core how to recompute what it stored.
+        //
+        // The catalog holds the composed value above, not a file hash, so
+        // anything comparing it against a fresh md5 of the template compares
+        // two recipes and always finds them different. mikser_explain did
+        // exactly that and reported `differs: true` for every layout on every
+        // site — a permanent false alarm about files nobody had edited.
+        //
+        // The recipe belongs here, so the recomputation does too. One
+        // function, the same one the gate uses, so the two cannot drift apart.
+        registerSourceChecksum(collection, async (entity) =>
+            checksumOf(await layoutInputBytes(entity.uri, entity.name, await sidecarInputs())))
 
         // Named so onSync can re-run it when a sidecar changes. A function
         // declaration, so it is hoisted above the onSync registration above.
