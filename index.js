@@ -329,8 +329,18 @@ export function layouts(userOptions = {}) {
         //
         // The recipe belongs here, so the recomputation does too. One
         // function, the same one the gate uses, so the two cannot drift apart.
-        registerSourceChecksum(collection, async (entity) =>
-            checksumOf(await layoutInputBytes(entity.uri, entity.name, await sidecarInputs())))
+        registerSourceChecksum(collection, async (entity) => {
+            // A sidecar is in this collection but is NOT composed: it is
+            // gated on its own bytes above, because it has no template and no
+            // sidecar of its own. Answering with a composed value here would
+            // report every sidecar as diverged — the same false alarm this
+            // registration exists to remove, pointed the other way.
+            //
+            // null means "nothing composed here, use the file hash", which is
+            // exactly right for it.
+            if (entity.type === 'sidecar') return null
+            return checksumOf(await layoutInputBytes(entity.uri, entity.name, await sidecarInputs()))
+        })
 
         // Named so onSync can re-run it when a sidecar changes. A function
         // declaration, so it is hoisted above the onSync registration above.
