@@ -584,6 +584,7 @@ export function layouts(userOptions = {}) {
         return {
             collection,
             type,
+            module: import.meta.url,
         }
     }
 }
