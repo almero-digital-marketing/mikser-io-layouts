@@ -112,9 +112,11 @@ export function layouts(userOptions = {}) {
             // and a second copy of the stamping is a second chance for an
             // edited sidecar to keep answering from cache.
             //
-            // Consumers: mikser-io-mcp-app, which invokes a sidecar's `call`,
-            // `read` and `list` exports for an app's actions and data. The
-            // render's own use of the same loader reads `load` and `plugins`.
+            // Offered, not required of anyone: a consumer asks for the
+            // `layouts` service and uses it if present. The render's own use
+            // of the same loader reads `load` and `plugins`; a surface that
+            // gives layouts behaviour beyond rendering can read exports of
+            // its own from the same file.
             sidecar: (layout) => loadSidecarModule(layout, {
                 layoutsFolder: layoutsFolderNow(),
                 logger: useLogger(),
