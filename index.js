@@ -29,7 +29,7 @@ import {
 import { createInspect } from './lib/inspect.js'
 import { createOnProcessed } from './lib/matching.js'
 import { createOnBeforeRender } from './lib/assembly.js'
-import { installSidecarModuleHook } from './lib/sidecar-modules.js'
+import { installSidecarModuleHook, loadSidecarModule } from './lib/sidecar-modules.js'
 import { registerMcpTools } from './lib/mcp.js'
 
 export function layouts(userOptions = {}) {
@@ -106,6 +106,19 @@ export function layouts(userOptions = {}) {
 
         provideService('layouts', {
             inspect: createInspect({ runtime, findEntity, findEntities, useDatabase, collection }),
+            // A layout's sidecar, loaded the way the render loads it —
+            // same path rule, same digest stamp. Offered as a service because
+            // the alternative is another package importing this one's lib/,
+            // and a second copy of the stamping is a second chance for an
+            // edited sidecar to keep answering from cache.
+            //
+            // Consumers: mikser-io-mcp-app, which invokes a sidecar's `call`,
+            // `read` and `list` exports for an app's actions and data. The
+            // render's own use of the same loader reads `load` and `plugins`.
+            sidecar: (layout) => loadSidecarModule(layout, {
+                layoutsFolder: layoutsFolderNow(),
+                logger: useLogger(),
+            }),
         }, { plugin: 'mikser-io-layouts' })
 
         // Tool registration. Registers against core's tool registry, which

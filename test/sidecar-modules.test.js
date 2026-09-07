@@ -23,7 +23,7 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-import { installSidecarModuleHook, setSidecarStamp, sidecarHookInstalled } from '../lib/sidecar-modules.js'
+import { installSidecarModuleHook, setSidecarStamp, sidecarHookInstalled, loadSidecarModule } from '../lib/sidecar-modules.js'
 
 describe('sidecar module identity', () => {
     let root, layoutsFolder
@@ -96,5 +96,53 @@ describe('sidecar module identity', () => {
         // Leave the tree as the other tests expect.
         await writeFile(path.join(layoutsFolder, 'lib', 'context.js'),
             "export const icon = 'filter.svg'\n")
+    })
+})
+
+// loadSidecarModule — the shared loader. The render path and the apps surface
+// both go through it; a second copy of the path rule or the stamping is a
+// second chance for an edited sidecar to keep answering from cache, which is
+// the failure the whole file above exists for.
+describe('loadSidecarModule', () => {
+    let root, layoutsFolder
+
+    before(async () => {
+        root = await mkdtemp(path.join(tmpdir(), 'sidecar-loader-'))
+        layoutsFolder = path.join(root, 'layouts')
+        await mkdir(layoutsFolder, { recursive: true })
+        await writeFile(path.join(layoutsFolder, 'order.js'),
+            'export const load = () => ({ page: 1 })\n'
+            + 'export const call = async ({ action }) => ({ handled: action })\n'
+            + 'export const read = async ({ uri }) => ({ uri })\n'
+            + 'export const list = async () => [{ uri: "app://order/rows" }]\n')
+        await writeFile(path.join(layoutsFolder, 'plain.js'), 'export const load = () => ({})\n')
+    })
+
+    after(async () => { await rm(root, { recursive: true, force: true }) })
+
+    it('returns the module with every named export a sidecar declares', async () => {
+        const sidecar = await loadSidecarModule({ name: 'order', inputs: { shared: 'd1' } }, { layoutsFolder })
+        assert.equal(typeof sidecar.load, 'function', 'the render reads load')
+        for (const name of ['call', 'read', 'list']) {
+            assert.equal(typeof sidecar[name], 'function', `the apps surface reads ${name}`)
+        }
+        assert.deepEqual(await sidecar.call({ action: 'approve' }), { handled: 'approve' })
+    })
+
+    it('returns null for a layout with no sidecar, rather than throwing', async () => {
+        assert.equal(await loadSidecarModule({ name: 'absent', inputs: {} }, { layoutsFolder }), null)
+    })
+
+    it('returns null when it is asked without a layout or a folder', async () => {
+        assert.equal(await loadSidecarModule(null, { layoutsFolder }), null)
+        assert.equal(await loadSidecarModule({ name: 'order' }, {}), null)
+    })
+
+    it('leaves a sidecar without the apps exports alone', async () => {
+        // Every existing sidecar is this shape. Reading `call` off one must be
+        // undefined, not an error — the apps surface decides what to do.
+        const sidecar = await loadSidecarModule({ name: 'plain', inputs: { shared: 'd1' } }, { layoutsFolder })
+        assert.equal(typeof sidecar.load, 'function')
+        assert.equal(sidecar.call, undefined)
     })
 })
