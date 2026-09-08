@@ -728,6 +728,112 @@ describe('layouts plugin: multi-layouts (matching)', () => {
     })
 })
 
+describe('layouts plugin: reporting that an entity renders nothing', () => {
+    // The manifest keeps a snapshot per (entity, destination) — its claim that
+    // the entity produced that file. An entity that STOPS producing output
+    // leaves the claim behind, and the page with it: still on disk, still
+    // matching the hash its own render recorded, so --audit-output reads OK
+    // while the site serves something the source no longer asks for.
+    //
+    // The manifest cannot see this alone. With no render task there is nothing
+    // to compare a claim against, and an asset whose preset threw looks
+    // identical from there — so guessing deletes the good derivative a failed
+    // preset exists to keep. This hook knows, so this hook says.
+    //
+    // What must NOT be reported is the whole difficulty. Both exclusions are
+    // errors, and mikser's rule through an error is that the last good output
+    // survives rather than the page coming down.
+    async function report(files, doc, options = {}) {
+        return withTempWorking(async (workingFolder) => {
+            const h = createHarness({
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out') },
+            })
+            const reported = []
+            h.runtime.manifest = { recordNoOutput: (id) => reported.push(id) }
+            layouts(options)(h.core)
+            await h.runHook('loaded')
+            for (const relativePath of files) {
+                await h.runSync('layouts', { action: 'create', context: { relativePath } })
+            }
+            h.journal.push({ id: 1, entity: doc, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+            return { reported, doc, logs: h.logs }
+        })
+    }
+
+    const plainDoc = (meta) => ({
+        id: '/documents/blog/welcome.md',
+        collection: 'documents',
+        name: 'blog/welcome',
+        format: 'md',
+        meta,
+    })
+
+    it('reports an entity that declared nothing and matched nothing', async () => {
+        const { reported, doc } = await report(['post.hbs'], plainDoc({}))
+        assert.deepEqual(doc.layouts, [], 'precondition: nothing resolved')
+        assert.deepEqual(reported, ['/documents/blog/welcome.md'])
+    })
+
+    it('stays quiet when a declared layout merely cannot be found', async () => {
+        // A typo, or a layout file renamed. The entity still says which layout
+        // it wants, so this is an error to fix — not a page to withdraw.
+        // Reporting it would delete every page naming a layout the moment that
+        // layout's filename changed.
+        const { reported, doc, logs } = await report(['post.hbs'], plainDoc({ layout: 'pst' }))
+        assert.deepEqual(doc.layouts, [], 'precondition: nothing resolved')
+        assert.ok(logs.some(l => l.args.join(' ').includes('Layout not found')),
+            'precondition: it really did fail to resolve')
+        assert.deepEqual(reported, [])
+    })
+
+    it('stays quiet when resolution threw', async () => {
+        // meta.layout and meta.layouts both set. Nothing was decided, so
+        // nothing follows from it.
+        const { reported, doc } = await report(
+            ['post.hbs'], plainDoc({ layout: 'post', layouts: ['post'] }))
+        assert.deepEqual(doc.layouts, [], 'precondition: resolution failed')
+        assert.deepEqual(reported, [])
+    })
+
+    it('stays quiet when a layout did match', async () => {
+        const { reported, doc } = await report(['post.hbs'], plainDoc({ layout: 'post' }))
+        assert.equal(doc.layouts.length, 1, 'precondition: it resolved')
+        assert.deepEqual(reported, [])
+    })
+
+    it('stays quiet when a CONFIG PATTERN matched and the author declared nothing', async () => {
+        // The case that pins down which question `declaredALayout` answers.
+        // The mirror block writes meta.layout for pattern-matched and
+        // auto-layout entities, so if it were read after that, "the author
+        // named a layout" and "we recorded the one we chose" would be the same
+        // field — and an entity that rendered perfectly well would be reported
+        // as producing nothing, taking its own fresh output off disk.
+        const { reported, doc } = await report(
+            ['post.hbs'], plainDoc({}), { match: { '@/blog/*': 'post' } })
+        assert.equal(doc.layouts.length, 1, 'precondition: the pattern matched')
+        assert.equal(doc.meta.layout, 'post', 'precondition: and the mirror recorded it')
+        assert.deepEqual(reported, [])
+    })
+
+    it('does not require the engine to offer recordNoOutput at all', async () => {
+        // The peer floor is core ^11.1.0 and recordNoOutput is newer, so an
+        // entity that renders nothing on an older engine has to be a quiet
+        // no-op rather than a crash mid-cycle.
+        await withTempWorking(async (workingFolder) => {
+            const h = createHarness({
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out') },
+            })
+            assert.equal(h.runtime.manifest, undefined, 'precondition: no manifest on the runtime')
+            layouts()(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'post.hbs' } })
+            h.journal.push({ id: 1, entity: plainDoc({}), operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+        })
+    })
+})
+
 describe('layouts plugin: multi-layouts (collision)', () => {
     it('drops both render tasks when two layouts produce the same destination', async () => {
         await withTempWorking(async (workingFolder) => {
