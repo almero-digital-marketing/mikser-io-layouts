@@ -126,6 +126,33 @@ destination: '/cards/{{entity.name}}.html'
 ---
 ```
 
+### `match:` — a layout claiming its own entities
+
+A layout can declare the pattern that selects it, instead of the config
+naming it from the other side. These two are the same rule:
+
+```js
+layouts({ match: { '@/blog/*': 'post-card' } })
+```
+
+```yaml
+# layouts/post-card.html.hbs
+---
+match: '@/blog/*'          # or a list: ['@/blog/*', '@/news/*']
+---
+```
+
+They are **peers**, not alternatives — an entity matched by a config pattern
+and by a layout's own pattern gets both layouts, exactly as two config
+patterns would. A document's own `meta.layout` still wins over both, and
+auto-layout still only runs when nothing matched at all.
+
+Patterns follow the same rule everywhere: `matchEntity` globs `entity.name`
+only for a pattern starting `@/`; anything else globs `entity.id`, which
+carries the `/<collection>/` prefix and the extension. A pattern that selects
+nothing is reported once per run on a full cycle, naming the layout that
+declared it.
+
 ```yaml
 # Pull from meta
 ---

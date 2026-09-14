@@ -210,6 +210,193 @@ describe('layouts plugin', () => {
         })
     })
 
+    it('a layout matches through `match:` in its own front-matter', async () => {
+        // Documented in the README beside `destination:` and never
+        // implemented. A layout carrying it produced no render task, logged
+        // nothing, and looked correctly configured — reported as the longest
+        // single detour of a consumer's session.
+        //
+        // The catalog entity is what carries parsed front-matter; the state
+        // map holds the file as synced. Seeding both is what a real build
+        // does, and is why reading the state map alone found no `match`.
+        await withTempWorking(async (workingFolder) => {
+            const catalog = []
+            const h = createHarness({
+                entities: catalog,
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out'), force: true },
+            })
+            layouts({ autoLayouts: false })(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'post-card.hbs' } })
+            catalog.push({
+                id: h.runtime.state.layouts.layouts['post-card'].id,
+                collection: 'layouts', name: 'post-card',
+                meta: { match: '@/blog/*' },
+            })
+
+            const doc = { id: '/documents/blog/welcome.md', collection: 'documents', name: 'blog/welcome', format: 'md', meta: {} }
+            h.journal.push({ id: 1, entity: doc, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+
+            assert.deepEqual(doc.layouts.map(l => l.name), ['post-card'])
+            assert.match(doc.layouts[0].matchedBy, /layouts\/post-card/,
+                'explain must say the rule came from the layout, not the config')
+        })
+    })
+
+    it('a layout can declare several patterns', async () => {
+        await withTempWorking(async (workingFolder) => {
+            const catalog = []
+            const h = createHarness({
+                entities: catalog,
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out'), force: true },
+            })
+            layouts({ autoLayouts: false })(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'card.hbs' } })
+            catalog.push({
+                id: h.runtime.state.layouts.layouts['card'].id,
+                collection: 'layouts', name: 'card',
+                meta: { match: ['@/blog/*', '@/news/*'] },
+            })
+
+            const news = { id: '/documents/news/launch.md', collection: 'documents', name: 'news/launch', format: 'md', meta: {} }
+            h.journal.push({ id: 1, entity: news, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+
+            assert.deepEqual(news.layouts.map(l => l.name), ['card'])
+        })
+    })
+
+    it('a front-matter pattern that selected nothing warns, naming the layout', async () => {
+        // The silence is the whole finding: without this the author of a
+        // typo'd front-matter pattern gets a green build and empty pages.
+        // Naming the layout matters because the same glob can be written in
+        // the config, and the fix lives in a different file.
+        await withTempWorking(async (workingFolder) => {
+            const catalog = []
+            const h = createHarness({
+                entities: catalog,
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out'), force: true },
+            })
+            layouts({ autoLayouts: false })(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'post-card.hbs' } })
+            catalog.push({
+                id: h.runtime.state.layouts.layouts['post-card'].id,
+                collection: 'layouts', name: 'post-card',
+                meta: { match: '@/blogg/*' },   // typo
+            })
+
+            const doc = { id: '/documents/blog/welcome.md', collection: 'documents', name: 'blog/welcome', format: 'md', meta: {} }
+            h.journal.push({ id: 1, entity: doc, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+
+            const warnings = h.logs.filter(l =>
+                l.level === 'warn' && l.args.join(' ').includes('Layout pattern'))
+            assert.equal(warnings.length, 1, `expected one warning, got ${warnings.length}`)
+            const [fields, ...message] = warnings[0].args
+            assert.equal(fields.code, 'layout-pattern-no-match')
+            assert.equal(fields.pattern, '@/blogg/*')
+            assert.equal(fields.declaredIn, 'post-card', 'says which layout wrote the pattern')
+            assert.match(format(...message), /layouts\/post-card/,
+                'the sentence points at the file to edit')
+        })
+    })
+
+    it('reports the one dud front-matter pattern among working ones', async () => {
+        // The shape this actually takes in a project: several layouts each
+        // claiming their own section, one of them typo'd. A working pattern
+        // elsewhere must not absolve the dead one — that would make the
+        // warning useless in exactly the configuration it is for.
+        await withTempWorking(async (workingFolder) => {
+            const catalog = []
+            const h = createHarness({
+                entities: catalog,
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out'), force: true },
+            })
+            layouts({ autoLayouts: false })(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'post-card.hbs' } })
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'news-card.hbs' } })
+            catalog.push({
+                id: h.runtime.state.layouts.layouts['post-card'].id,
+                collection: 'layouts', name: 'post-card',
+                meta: { match: '@/blog/*' },            // works
+            })
+            catalog.push({
+                id: h.runtime.state.layouts.layouts['news-card'].id,
+                collection: 'layouts', name: 'news-card',
+                meta: { match: '@/newss/*' },           // typo
+            })
+
+            const doc = { id: '/documents/blog/welcome.md', collection: 'documents', name: 'blog/welcome', format: 'md', meta: {} }
+            h.journal.push({ id: 1, entity: doc, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+
+            assert.deepEqual(doc.layouts.map(l => l.name), ['post-card'], 'the good pattern still matched')
+            const warnings = h.logs.filter(l =>
+                l.level === 'warn' && l.args.join(' ').includes('Layout pattern'))
+            assert.equal(warnings.length, 1, `expected exactly one warning, got ${warnings.length}`)
+            assert.equal(warnings[0].args[0].declaredIn, 'news-card', 'names the dud, not the working one')
+        })
+    })
+
+    it('a front-matter pattern is a peer of a config pattern, not a fallback', async () => {
+        // Two rules claiming one entity give two layouts, exactly as two
+        // config patterns would. Making front-matter a fallback would mean
+        // adding a config rule silently switched a layout off.
+        await withTempWorking(async (workingFolder) => {
+            const catalog = []
+            const h = createHarness({
+                entities: catalog,
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out'), force: true },
+            })
+            layouts({ autoLayouts: false, match: { '@/blog/*': 'post' } })(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'post.hbs' } })
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'post-card.hbs' } })
+            catalog.push({
+                id: h.runtime.state.layouts.layouts['post-card'].id,
+                collection: 'layouts', name: 'post-card',
+                meta: { match: '@/blog/*' },
+            })
+
+            const doc = { id: '/documents/blog/welcome.md', collection: 'documents', name: 'blog/welcome', format: 'md', meta: {} }
+            h.journal.push({ id: 1, entity: doc, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+
+            assert.deepEqual(doc.layouts.map(l => l.name).sort(), ['post', 'post-card'])
+        })
+    })
+
+    it('an author-declared meta.layout still wins over a front-matter pattern', async () => {
+        // Precedence is unchanged: what the document asks for beats what a
+        // layout claims, the same way it beats a config pattern.
+        await withTempWorking(async (workingFolder) => {
+            const catalog = []
+            const h = createHarness({
+                entities: catalog,
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out'), force: true },
+            })
+            layouts({ autoLayouts: false })(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'post.hbs' } })
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'post-card.hbs' } })
+            catalog.push({
+                id: h.runtime.state.layouts.layouts['post-card'].id,
+                collection: 'layouts', name: 'post-card',
+                meta: { match: '@/blog/*' },
+            })
+
+            const doc = { id: '/documents/blog/welcome.md', collection: 'documents', name: 'blog/welcome', format: 'md', meta: { layout: 'post' } }
+            h.journal.push({ id: 1, entity: doc, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+
+            assert.deepEqual(doc.layouts.map(l => l.name), ['post'])
+        })
+    })
+
     it('stays silent about an unmatched pattern on an incremental cycle', async () => {
         // The inverse of the test above, and the reason the gate exists. An
         // incremental run re-evaluates only what changed, so a pattern that
