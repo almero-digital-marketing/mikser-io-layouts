@@ -210,6 +210,81 @@ describe('layouts plugin', () => {
         })
     })
 
+    it('never hands a renderer a layout with its front matter still attached', async () => {
+        // resolveLayout falls back to the state map when the catalog has not
+        // caught up, and the state map holds the file AS SYNCED. That raw
+        // text has failed twice, in two engines: Handlebars emitted the YAML
+        // into the page, and LiquidJS refuses to parse it at all — reported
+        // as "invalid range syntax" at line 2, the front-matter line, which
+        // takes the whole layout down.
+        //
+        // The catalog is deliberately EMPTY here, which is the fallback.
+        await withTempWorking(async (workingFolder) => {
+            const h = createHarness({
+                entities: [],
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out'), force: true },
+            })
+            layouts({ autoLayouts: false })(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'post.hbs' } })
+            // The file as synced: front matter still on it.
+            h.runtime.state.layouts.layouts['post'].content =
+                '---\ndestination: "/{{ entity.name }}.html"\n---\n<h1>body</h1>\n'
+
+            const doc = { id: '/documents/hello.md', collection: 'documents', name: 'hello', format: 'md', meta: { layout: 'post' } }
+            h.journal.push({ id: 1, entity: doc, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+
+            assert.ok(!doc.layout.content.trimStart().startsWith('---'),
+                `front matter reached the renderer: ${JSON.stringify(doc.layout.content.slice(0, 40))}`)
+            assert.match(doc.layout.content, /<h1>body<\/h1>/, 'the template survived')
+        })
+    })
+
+    it('lifts the fallback layout\'s front matter onto meta, so destination still works', async () => {
+        // Stripping without lifting would trade a parse error for a silently
+        // ignored `destination:` — the state-map entry carries no meta at all
+        // otherwise, which is why a front-matter `match:` saw nothing there.
+        await withTempWorking(async (workingFolder) => {
+            const h = createHarness({
+                entities: [],
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out'), force: true },
+            })
+            layouts({ autoLayouts: false })(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'post.hbs' } })
+            h.runtime.state.layouts.layouts['post'].content =
+                '---\ndestination: "/cards/{{entity.name}}.html"\n---\n<h1>body</h1>\n'
+
+            const doc = { id: '/documents/hello.md', collection: 'documents', name: 'hello', format: 'md', meta: { layout: 'post' } }
+            h.journal.push({ id: 1, entity: doc, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+
+            assert.equal(doc.layout.meta.destination, '/cards/{{entity.name}}.html')
+        })
+    })
+
+    it('leaves a malformed front-matter block alone rather than dropping it', async () => {
+        // Unparseable YAML shown to the author beats silently discarded.
+        await withTempWorking(async (workingFolder) => {
+            const h = createHarness({
+                entities: [],
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out'), force: true },
+            })
+            layouts({ autoLayouts: false })(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'post.hbs' } })
+            const broken = "---\ndestination: '/{{ before (after entity.name '/') '_' }}'\n---\n<h1>body</h1>\n"
+            h.runtime.state.layouts.layouts['post'].content = broken
+
+            const doc = { id: '/documents/hello.md', collection: 'documents', name: 'hello', format: 'md', meta: { layout: 'post' } }
+            h.journal.push({ id: 1, entity: doc, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+
+            assert.equal(doc.layout.content, broken, 'left as written')
+        })
+    })
+
     it('a layout matches through `match:` in its own front-matter', async () => {
         // Documented in the README beside `destination:` and never
         // implemented. A layout carrying it produced no render task, logged
