@@ -24,12 +24,14 @@ import {
     writeOutput, reportUnchanged,
     provideService,
     cliOption,
+    watchFolder,
 } from 'mikser-io'
 
 import { createInspect } from './lib/inspect.js'
 import { createOnProcessed } from './lib/matching.js'
 import { createOnBeforeRender } from './lib/assembly.js'
-import { installSidecarModuleHook, loadSidecarModule } from './lib/sidecar-modules.js'
+import { installSidecarModuleHook, loadSidecarModule, recordedSidecarModules } from './lib/sidecar-modules.js'
+import { createSidecarGraph } from './lib/sidecar-graph.js'
 import { registerMcpTools } from './lib/mcp.js'
 
 export function layouts(userOptions = {}) {
@@ -57,6 +59,8 @@ export function layouts(userOptions = {}) {
         renderEntities,
         onComplete,
         onSync,
+        onFinalized,
+        triggeredHook,
         matchEntity,
         changeExtension,
         getFormatInfo,
@@ -131,8 +135,17 @@ export function layouts(userOptions = {}) {
         })
 
         onSync(collection, async ({ action, context }) => {
-            if (!context.relativePath) return false
             const logger = useLogger()
+            // A module a sidecar imports from outside the layouts folder.
+            // It has no relativePath because it is not in this collection and
+            // is nobody's entity — it is an INPUT, so the response is the same
+            // rescan a sidecar edit gets.
+            if (context.module) {
+                logger.debug('Layouts module changed (%s) — rescanning layouts', context.module)
+                await rescanLayouts()
+                return
+            }
+            if (!context.relativePath) return false
             const { relativePath } = context
 
             // A .js file under the layouts folder is a SIDECAR (or something
@@ -245,9 +258,25 @@ export function layouts(userOptions = {}) {
             // imports is re-evaluated when any .js under this folder changes
             // and served from cache when none has. Without it only the
             // sidecar entry point reloads.
-            installSidecarModuleHook({ layoutsFolder: runtime.options.layoutsFolder, logger })
+            installSidecarModuleHook({
+                layoutsFolder: runtime.options.layoutsFolder,
+                workingFolder: runtime.options.workingFolder,
+                logger,
+            })
 
             watch(collection, runtime.options.layoutsFolder)
+            await watchSidecarModules()
+
+            // The graph is only observable once a sidecar has loaded, which
+            // is after this cycle's scan — so it is stored at the end of the
+            // cycle for the next one to read. Storing it is not a render:
+            // each path is kept with the checksum it has right now, so
+            // nothing is reported as changed by being noticed.
+            onFinalized(async () => {
+                if (await sidecarGraph.discover(recordedSidecarModules())) {
+                    await watchSidecarModules()
+                }
+            })
 
             // Rebuild the in-memory layouts map from the catalog. Indexed
             // on `collection`, returns the small layouts set — typically a
@@ -312,6 +341,33 @@ export function layouts(userOptions = {}) {
             return path.isAbsolute(name) ? name : path.join(runtime.options.workingFolder, name)
         }
 
+        const sidecarGraph = createSidecarGraph({ runtime, logger: useLogger })
+        let watchedModules = null
+
+        // Watch what the sidecars import from outside the layouts folder.
+        //
+        // `watch(collection, layoutsFolder)` covers the folder and nothing
+        // else, so an edit to a helper one level up produced no event and no
+        // cycle — the digest below would have caught it, but only once
+        // something else started a build. A plain folder watcher plus a
+        // TRIGGER is all this needs: the sync handler rescans, the rescan
+        // re-emits whichever layouts moved, and their dependents re-render.
+        async function watchSidecarModules() {
+            if (runtime.options.watch !== true) return
+            const files = await sidecarGraph.tracked()
+            if (watchedModules && _.isEqual(watchedModules.files, files)) return
+            await watchedModules?.watcher?.close()
+            watchedModules = files.length
+                ? {
+                    files,
+                    watcher: watchFolder(files, async (event, fullPath) => {
+                        useLogger().debug('Layouts module changed (%s) — triggering a cycle', fullPath)
+                        await triggeredHook(collection, { module: fullPath })
+                    }),
+                }
+                : { files, watcher: null }
+        }
+
         async function sidecarInputs() {
             const scriptPaths = (await globby('**/*.js', { cwd: layoutsFolderNow() }))
                 .filter(isSidecarScript)
@@ -322,6 +378,14 @@ export function layouts(userOptions = {}) {
                 own.set(rel.replace(/\.js$/, ''), sum)
                 shared.push(`${rel}:${sum}`)
             }
+            // Fold in what the sidecars imported from outside this folder.
+            // Recorded during the previous cycle's renders and persisted at
+            // the end of it — a one-shot build exits between the render that
+            // observes the graph and the scan that would use it, so keeping
+            // it in memory would mean it was never used at all.
+            const moduleDigest = await sidecarGraph.digest()
+            if (moduleDigest) shared.push(`modules:${moduleDigest}`)
+            await watchSidecarModules()
             return { own, sharedDigest: shared.length ? checksumOf(shared.join('\n')) : '' }
         }
 

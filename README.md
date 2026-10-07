@@ -246,6 +246,38 @@ Everything else means "you may want to look", never "this is broken": `missingOp
 
 Yes — layout file changes trigger re-rendering of dependent documents via the refs system.
 
+### What a sidecar imports is an input too
+
+A layout's `.js` sidecar is part of that layout's checksum, and so is every
+`.js` file under the layouts folder — editing `layouts/lib/context.js`
+re-renders the layouts that depend on it.
+
+Sidecars also import helpers from **outside** the layouts folder, which is
+where code shared with `mikser.config.js` or a script lives. Those cannot be
+globbed, because the set is whatever a sidecar happens to import, so they are
+recorded as they resolve: the first build that loads a sidecar learns its
+import graph, stores it in the runtime folder, and from then on editing one of
+those modules re-renders the layouts that reach it, under `--watch` and on a
+plain rebuild alike. This is the same bargain `readFile` and `glob` tracking
+make — an edge is learned from the run that used it.
+
+Two consequences worth knowing:
+
+- **Only project files count.** `node_modules` and anything outside the
+  working folder are left alone: they are not what you are editing, and
+  hashing them on every scan would cost the whole tree. Bump the dependency
+  and rebuild.
+- **A module in a sidecar's import graph is re-evaluated when layout code
+  changes.** That is what makes an edit take effect in a long-running
+  `--watch` process rather than serving the copy loaded at boot. It also means
+  a process-wide singleton — a connection pool, a cache — does not belong in
+  one. Import it lazily inside the function that needs it, or keep it out of
+  the graph.
+
+The first build after upgrading discovers the graph and **does not** re-render
+anything for it: each module is stored with the checksum it already had, so
+only a later edit moves anything.
+
 ## Href lookups
 
 The href resolution path goes through `runtime.lookupHref(href)` — a sync function that hits the `meta_href` index on `mikser_entities`. Render workers open their own read-only sqlite handle on first task and call the same primitive; templates stay sync. The `href` render plugin uses this; layout-side code can call it directly.
