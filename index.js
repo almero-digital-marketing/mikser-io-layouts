@@ -33,6 +33,7 @@ import { createOnBeforeRender } from './lib/assembly.js'
 import { installSidecarModuleHook, loadSidecarModule, recordedSidecarModules } from './lib/sidecar-modules.js'
 import { createSidecarGraph } from './lib/sidecar-graph.js'
 import { registerMcpTools } from './lib/mcp.js'
+import { DISPATCHER } from './lib/dispatcher.js'
 
 export function layouts(userOptions = {}) {
     // cleanUrls DEFAULTS TO TRUE. It previously had no default, so unset it
@@ -626,6 +627,13 @@ export function layouts(userOptions = {}) {
 
         onComplete(async ({ entity, options, output }) => {
             const logger = useLogger()
+            // Another dispatcher's task, even though the entity has a layout:
+            // a preset clones its source, `layout` and all, and its result
+            // was written here as a file named after the derivative's
+            // absolute path — `out/home/…/assets/<preset>/…`, one per
+            // derivative, served with the site. Postprocess completions carry
+            // no dispatcher and stay this plugin's, as they always were.
+            if (options?.dispatcher && options.dispatcher !== DISPATCHER) return
             if (entity.layout && !options?.ignore && output.result != null) {
                 // `entity.options.save === false` (set by useRenderer when
                 // called with { save: false }) opts out of writing the

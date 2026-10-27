@@ -1498,3 +1498,92 @@ describe('layouts plugin: a sidecar is a tracked input (layouts#4)', () => {
         })
     })
 })
+
+describe('layouts plugin: naming its own work', () => {
+    // An entity can be a page here and the source of preset derivatives in
+    // mikser-io-assets, under one id. The engine keeps each dispatcher's
+    // outputs apart only if the work says whose it is — without that, a cycle
+    // of preset renders read as the entity no longer producing its page, and
+    // the page was unlinked.
+    const page = {
+        id: '/documents/report.md',
+        collection: 'documents',
+        type: 'document',
+        name: 'report',
+        format: 'md',
+        time: 1,
+        meta: {},
+        layout: { name: 'page', template: 'hbs', format: 'html' },
+    }
+
+    it('names its render tasks, and reads only its own recorded hashes', async () => {
+        await withTempWorking(async (workingFolder) => {
+            const h = createHarness({
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out'), force: false },
+                entities: [page],
+            })
+            h.runtime.refs = { inverseClosureOf: () => new Set([page.id]) }
+            const asked = []
+            h.runtime.manifest = {
+                recordedHashes: (dispatcher) => { asked.push(dispatcher); return new Map() },
+                queryAffected: () => new Set(),
+            }
+            layouts()(h.core)
+            await h.runHook('loaded')
+            h.journal.push({ id: 99, entity: page, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('beforeRender', { aborted: false })
+            assert.equal(h.renderTasks.length, 1, 'precondition: the page was dispatched')
+            assert.equal(h.renderTasks[0].options.dispatcher, 'layouts')
+            assert.deepEqual(asked, ['layouts'],
+                'a preset\'s snapshot of the same entity must not stand in for the page\'s')
+        })
+    })
+
+    it('names itself when it reports an entity renders nothing', async () => {
+        await withTempWorking(async (workingFolder) => {
+            const h = createHarness({
+                options: { workingFolder, outputFolder: path.join(workingFolder, 'out') },
+            })
+            const reported = []
+            h.runtime.manifest = { recordNoOutput: (id, dispatcher) => reported.push([id, dispatcher]) }
+            layouts()(h.core)
+            await h.runHook('loaded')
+            await h.runSync('layouts', { action: 'create', context: { relativePath: 'post.hbs' } })
+            const doc = { id: '/documents/plain.md', collection: 'documents', name: 'plain', format: 'md', meta: {} }
+            h.journal.push({ id: 1, entity: doc, operation: 'create', context: {}, options: {}, output: null })
+            await h.runHook('processed', { aborted: false })
+            assert.deepEqual(reported, [['/documents/plain.md', 'layouts']])
+        })
+    })
+
+    describe('on completion', () => {
+        // A preset task clones its source, so it arrives here with the
+        // source's `layout`. Its result is not a page: written out, it became
+        // a file at out/<the derivative's absolute path>, one per derivative,
+        // served with the site.
+        async function complete(options, destination) {
+            return withTempWorking(async (workingFolder) => {
+                const outputFolder = path.join(workingFolder, 'out')
+                const h = createHarness({ options: { workingFolder, outputFolder } })
+                layouts()(h.core)
+                await h.runHook('loaded')
+                const [onComplete] = h.hooks.complete
+                await onComplete({ entity: { ...page, destination }, options, output: { result: 'bytes' } })
+                try { await access(path.join(outputFolder, destination)); return true } catch { return false }
+            })
+        }
+
+        it('leaves another dispatcher\'s task alone', async () => {
+            const derivative = '/srv/site/assets/marks/report.webp'
+            assert.equal(await complete({ renderer: 'preset', dispatcher: 'assets' }, derivative), false)
+        })
+
+        it('writes its own', async () => {
+            assert.equal(await complete({ renderer: 'hbs', dispatcher: 'layouts' }, '/report/index.html'), true)
+        })
+
+        it('writes a completion that names no dispatcher, as a postprocess stage does', async () => {
+            assert.equal(await complete({ postprocessor: 'mjml' }, '/report/index.html'), true)
+        })
+    })
+})
