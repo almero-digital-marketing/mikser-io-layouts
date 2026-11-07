@@ -183,6 +183,32 @@ The common cases that hit this are:
 1. Two layouts produce the same format (`.html` from both `post.html.hbs` and `post-card.html.hbs`). Fix: set `destination:` on one.
 2. Two layouts with the same name in the same directory — file-system collision, not engine collision. Rename one.
 
+## A sidecar that throws
+
+A sidecar that fails to import, or whose `load()` throws, fails **that page**
+and nothing else. It is handled the way a template that throws is handled:
+
+```
+🔴 [layout-sidecar-failed] Layout sidecar layouts/page.js load() threw for /documents/a.md:
+   SHARE_IMAGE_DEFAULT is not defined (at layouts/lib/context.js:1:49) — no output for it
+   this cycle; the last good output stays, and the next cycle tries again.
+🔴 Mikser completed with 1 render error
+```
+
+- every other page in the cycle still renders;
+- it counts as a render error, so a one-shot build exits 1;
+- the last good output stays on disk;
+- the failure is recorded, so the next cycle retries the page even if nothing
+  it reads has changed — a sidecar fetching from something that was down is
+  fixed by nobody saving anything — and `--explain` does not call it current.
+
+The `(at …)` is the first stack frame in your own code. The message alone
+names a missing const, not the helper three imports down that used it.
+
+This matters most under `--watch`, where a helper saved in two steps is
+loaded between them. That used to abort the cycle and take the process with
+it.
+
 ## Postprocess chains
 
 A layout's filename encodes a postprocessor chain after the format segment: `<name>.<format>-<post1>[-<post2>...].<template>`. Each `post*` segment names a `mikser-io-post-<name>` plugin. Stages run in order, threading file paths (not buffers) between them; the final extension comes from the last stage's `output:`.
